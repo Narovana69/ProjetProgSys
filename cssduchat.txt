@@ -1,0 +1,223 @@
+format html:
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Clone Prototype</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app-container">
+    <nav class="navbar">
+        <div class="nav-item active">🏠</div>
+        <div class="nav-item">JS</div>
+        <div class="nav-item">PY</div>
+        <div class="spacer"></div>
+        
+        <div class="user-control-panel" onclick="openSettings()">
+            <div class="avatar-wrapper">
+                <img src="https://i.pravatar.cc/32?u=me" class="mini-avatar">
+                <div class="status-dot online"></div>
+            </div>
+            <div class="control-icons">⚙️</div>
+        </div>
+    </nav>
+
+    <div class="main-content">
+        <header class="chat-header">
+            <div class="channel-info">
+                <span class="hashtag">#</span>
+                <h3>general-chat</h3>
+            </div>
+            <div class="header-actions">
+                <button class="icon-btn" title="Start Voice Call" onclick="startCall('voice')">📞</button>
+                <button class="icon-btn" title="Start Video Call" onclick="startCall('video')">📹</button>
+                <input type="text" class="search-bar" placeholder="Search messages...">
+            </div>
+        </header>
+
+        <div class="chat-wrapper" id="chat-scroller">
+            <div class="message-container starting" id="msg-1" data-author="other">
+                <img src="https://i.pravatar.cc/40?u=alex" class="avatar">
+                <div class="content-wrapper">
+                    <div class="message-header">
+                        <span class="username" style="color: #e91e63;">Alex_Dev</span>
+                        <span class="timestamp">Today at 6:15 PM</span>
+                    </div>
+                    <div class="message-body">Hey everyone! Is the new right-click menu working now?</div>
+                </div>
+                <div class="hover-toolbar"><button>✎</button></div>
+            </div>
+
+            <div class="message-container starting" id="msg-2" data-author="me">
+                <img src="https://i.pravatar.cc/40?u=me" class="avatar">
+                <div class="content-wrapper">
+                    <div class="message-header">
+                        <span class="username">Me</span>
+                        <span class="timestamp">Today at 6:16 PM</span>
+                    </div>
+                    <div class="message-body">Testing the first message...</div>
+                </div>
+                <div class="hover-toolbar"><button>✎</button><button onclick="deleteSelectedMessage('msg-2')">🗑️</button></div>
+            </div>
+
+            <div class="message-container grouped" id="msg-3" data-author="me">
+                <div class="content-wrapper">
+                    <span class="group-timestamp">6:16 PM</span>
+                    <div class="message-body">And the second grouped message! This looks clean.</div>
+                </div>
+                <div class="hover-toolbar"><button>✎</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="context-menu" class="context-menu">
+    <ul>
+        <li onclick="copyMessageText()">Copy Text</li>
+        <li onclick="alert('Replying...')">Reply</li>
+        <hr class="menu-divider">
+        <li class="delete-opt" onclick="deleteSelectedMessage()">Delete Message</li>
+    </ul>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
+
+format css:
+:root {
+    --bg-main: #313338;
+    --bg-side: #1e1f22;
+    --bg-hover: #2e3035;
+    --bg-menu: #111214;
+    --text-normal: #dbdee1;
+    --text-muted: #949ba4;
+    --header-primary: #ffffff;
+    --brand: #5865f2;
+    --danger: #f23f42;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background-color: var(--bg-main); font-family: 'gg sans', 'Helvetica Neue', Arial, sans-serif; color: var(--text-normal); overflow: hidden; }
+
+.app-container { display: flex; height: 100vh; width: 100vw; }
+
+/* Navbar */
+.navbar { width: 72px; background-color: #111214; display: flex; flex-direction: column; align-items: center; padding: 12px 0; gap: 8px; }
+.nav-item { width: 48px; height: 48px; background-color: var(--bg-main); border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; font-size: 1.2rem; }
+.nav-item:hover, .nav-item.active { border-radius: 16px; background-color: var(--brand); color: white; }
+.spacer { flex-grow: 1; }
+
+.user-control-panel { background: #232428; width: 100%; padding: 10px; display: flex; flex-direction: column; align-items: center; cursor: pointer; }
+.avatar-wrapper { position: relative; }
+.mini-avatar { width: 32px; height: 32px; border-radius: 50%; }
+.status-dot { width: 12px; height: 12px; border: 2px solid #232428; border-radius: 50%; position: absolute; bottom: 0; right: 0; }
+.online { background-color: #23a55a; }
+
+/* Main Content & Header */
+.main-content { flex-grow: 1; display: flex; flex-direction: column; }
+.chat-header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #232428; }
+.channel-info { display: flex; align-items: center; gap: 8px; }
+.hashtag { color: var(--text-muted); font-size: 1.5rem; }
+.icon-btn { background: none; border: none; font-size: 1.2rem; cursor: pointer; filter: grayscale(1); margin-left: 10px; }
+.search-bar { background: #1e1f22; border: none; padding: 4px 8px; border-radius: 4px; color: white; margin-left: 10px; }
+
+/* Messages */
+.chat-wrapper { flex-grow: 1; overflow-y: auto; padding: 16px 0; }
+.message-container { display: flex; padding: 2px 16px; position: relative; }
+.message-container:hover { background-color: var(--bg-hover); }
+.message-container.starting { margin-top: 16px; }
+
+.avatar { width: 40px; height: 40px; border-radius: 50%; margin-right: 16px; flex-shrink: 0; }
+.username { font-weight: 600; color: white; margin-right: 8px; }
+.timestamp { font-size: 0.75rem; color: var(--text-muted); }
+.message-body { line-height: 1.375rem; }
+
+.message-container.grouped .content-wrapper { margin-left: 56px; position: relative; }
+.group-timestamp { position: absolute; left: -50px; width: 45px; font-size: 0.7rem; color: var(--text-muted); opacity: 0; }
+.message-container.grouped:hover .group-timestamp { opacity: 1; }
+
+/* Hover Toolbar */
+.hover-toolbar { display: none; position: absolute; top: -15px; right: 16px; background: var(--bg-main); border: 1px solid #232428; border-radius: 4px; z-index: 10; }
+.message-container:hover .hover-toolbar { display: flex; }
+.hover-toolbar button { background: none; border: none; color: var(--text-muted); padding: 4px 8px; cursor: pointer; }
+
+/* CONTEXT MENU - FIXED POSITION */
+.context-menu { position: fixed; display: none; background: var(--bg-menu); width: 188px; border-radius: 4px; padding: 8px; z-index: 10000; box-shadow: 0 8px 16px rgba(0,0,0,0.5); }
+.context-menu ul { list-style: none; padding: 0; margin: 0; }
+.context-menu li { padding: 8px 12px; font-size: 14px; cursor: pointer; color: var(--text-muted); border-radius: 2px; }
+.context-menu li:hover { background: var(--brand); color: white; }
+.menu-divider { border: 0; border-top: 1px solid #2e3035; margin: 4px 0; }
+.delete-opt { color: var(--danger) !important; }
+.delete-opt:hover { background: var(--danger) !important; color: white !important; }
+
+format js:
+const contextMenu = document.getElementById('context-menu');
+const chatScroller = document.getElementById('chat-scroller');
+
+// 1. Context Menu Right-Click Logic
+document.addEventListener('contextmenu', (e) => {
+    const msg = e.target.closest('.message-container');
+    
+    if (msg) {
+        e.preventDefault();
+        
+        // Show and Position
+        contextMenu.style.display = 'block';
+        
+        let x = e.clientX;
+        let y = e.clientY;
+
+        // Prevent overflow
+        if (x + 190 > window.innerWidth) x -= 190;
+        if (y + 150 > window.innerHeight) y -= 150;
+
+        contextMenu.style.left = `${x}px`;
+        contextMenu.style.top = `${y}px`;
+        
+        // Link message ID to menu
+        contextMenu.dataset.targetId = msg.id;
+    } else {
+        contextMenu.style.display = 'none';
+    }
+});
+
+// Close menu on click
+document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) {
+        contextMenu.style.display = 'none';
+    }
+});
+
+// 2. CRUD Actions
+function deleteSelectedMessage(manualId = null) {
+    const id = manualId || contextMenu.dataset.targetId;
+    const el = document.getElementById(id);
+    if (el) {
+        el.remove();
+        contextMenu.style.display = 'none';
+    }
+}
+
+function copyMessageText() {
+    const id = contextMenu.dataset.targetId;
+    const text = document.querySelector(`#${id} .message-body`).innerText;
+    navigator.clipboard.writeText(text);
+    contextMenu.style.display = 'none';
+}
+
+// 3. Call Simulation
+function startCall(type) {
+    const color = type === 'video' ? '#5865f2' : '#23a55a';
+    alert(`Starting ${type} call...`);
+    // Example UI change
+    document.querySelector('.chat-header').style.borderTop = `3px solid ${color}`;
+}
+
+// 4. Parameter/Settings Simulation
+function openSettings() {
+    alert("Opening Settings: User Profile, Privacy, Appearance...");
+}
