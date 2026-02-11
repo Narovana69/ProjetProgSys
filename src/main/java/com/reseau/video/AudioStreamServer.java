@@ -76,8 +76,13 @@ public class AudioStreamServer {
         final int clientId = nextClientId.getAndIncrement();
 
         try (Socket s = socket;
-             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
-             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream()))) {
+             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 16384));
+             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 16384))) {
+
+            // Optimize socket for low latency audio
+            s.setTcpNoDelay(true);
+            s.setSendBufferSize(65536);
+            s.setReceiveBufferSize(65536);
 
             clientOutputs.put(clientId, out);
 

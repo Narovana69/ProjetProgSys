@@ -1846,11 +1846,15 @@ public class ChatWindow {
         if (VideoCallManager.getInstance().isCallActive()) {
             VideoCallWindow existingCall = VideoCallManager.getInstance().getActiveCall();
             if (existingCall != null) {
-                existingCall.getStage().toFront();
+                try {
+                    existingCall.getStage().toFront();
+                } catch (Exception ignored) {}
                 showTemporaryMessage("📞 Un appel est déjà en cours - amenez la fenêtre en avant");
                 System.out.println("⚠️ Tentative de démarrer un appel alors qu'un autre est actif");
             } else {
-                showTemporaryMessage("⚠️ Un appel est en cours, attendez...");
+                // State is stale, reset the manager
+                VideoCallManager.getInstance().reset();
+                showTemporaryMessage("⚠️ État réinitialisé, réessayez");
             }
             return;
         }
@@ -1881,12 +1885,12 @@ public class ChatWindow {
             } else {
                 // L'appel n'a pas pu être démarré
                 System.err.println("❌ Le gestionnaire a rejeté l'appel");
-                newCallWindow.disconnect();
                 showTemporaryMessage("❌ Un autre appel est déjà en cours. Fermez-le d'abord.");
             }
         } catch (Exception e) {
             System.err.println("❌ Erreur lors du démarrage de l'appel: " + e.getMessage());
             e.printStackTrace();
+            VideoCallManager.getInstance().reset();
             showTemporaryMessage("❌ Erreur: " + e.getMessage());
         }
     }

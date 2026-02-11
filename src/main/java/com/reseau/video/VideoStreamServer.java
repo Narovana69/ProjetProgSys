@@ -1,9 +1,9 @@
 package com.reseau.video;
 
-import java.io.BufferedOutputStream;
 import java.io.BufferedInputStream;
-import java.io.DataOutputStream;
+import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -80,8 +80,13 @@ public class VideoStreamServer {
         final int clientId = nextClientId.getAndIncrement();
 
         try (Socket s = socket;
-             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
-             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream()))) {
+             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 65536));
+             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 65536))) {
+
+            // Optimize socket for low latency
+            s.setTcpNoDelay(true);
+            s.setSendBufferSize(131072);
+            s.setReceiveBufferSize(131072);
 
             // Read username from client
             int usernameLen = in.readInt();

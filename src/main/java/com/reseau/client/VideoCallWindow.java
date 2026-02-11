@@ -28,6 +28,7 @@ import javax.sound.sampled.TargetDataLine;
 import org.opencv.core.Core;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfByte;
+import org.opencv.core.MatOfInt;
 import org.opencv.imgcodecs.Imgcodecs;
 import org.opencv.videoio.VideoCapture;
 
@@ -108,16 +109,25 @@ public class VideoCallWindow {
     private final AtomicBoolean muteSpeaker = new AtomicBoolean(false);
     private final Map<Integer, ArrayBlockingQueue<byte[]>> audioBuffers = new ConcurrentHashMap<>();
 
-    // Audio constants
-    private static final int AUDIO_SAMPLE_RATE = 16000;
-    private static final int AUDIO_FRAME_MS = 20;
+    // Audio constants — CD-quality mono (44.1 kHz, 16-bit, mono)
+    private static final int AUDIO_SAMPLE_RATE = 44100;
+    private static final int AUDIO_FRAME_MS = 40;
     private static final int AUDIO_SAMPLES_PER_FRAME = (AUDIO_SAMPLE_RATE * AUDIO_FRAME_MS) / 1000;
-    private static final int AUDIO_BYTES_PER_FRAME = AUDIO_SAMPLES_PER_FRAME * 2;
+    private static final int AUDIO_BYTES_PER_FRAME = AUDIO_SAMPLES_PER_FRAME * 2; // 3528 bytes
+    // Noise gate threshold — samples below this amplitude are silenced (anti-feedback)
+    private static final short NOISE_GATE_THRESHOLD = 200;
+    // Noise gate fade length (in samples) for smooth transitions
+    private static final int NOISE_GATE_FADE_SAMPLES = 64;
+    // High-pass filter cutoff (removes low-freq rumble below ~100 Hz)
+    private static final float HP_FILTER_ALPHA = 0.993f; // ~100Hz @ 44.1kHz
 
-    private static final int VIDEO_FRAME_DELAY_MS = 33;
+    private static final int VIDEO_FRAME_DELAY_MS = 50;
     
     // Callback when window is closed
     private Runnable onWindowClosed;
+    
+    // Guard against double disconnect
+    private final AtomicBoolean disconnected = new AtomicBoolean(false);
 
     public VideoCallWindow(String username, String serverHost, int videoPort, int audioPort) {
         this.username = username;
@@ -268,9 +278,7 @@ public class VideoCallWindow {
 
         stage.setOnCloseRequest(e -> {
             disconnect();
-            if (onWindowClosed != null) {
-                Platform.runLater(onWindowClosed);
-            }
+            // onWindowClosed is already called inside disconnect(), no need to call again
         });
     }
 
@@ -351,10 +359,13 @@ public class VideoCallWindow {
         Platform.runLater(() -> statusLabel.setText("Connecting to " + host + ":" + port + " ..."));
 
         try (Socket s = new Socket(host, port);
-             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
-             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream()))) {
+             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 65536));
+             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 65536))) {
 
             this.socket = s;
+            s.setTcpNoDelay(true);
+            s.setSendBufferSize(131072);
+            s.setReceiveBufferSize(131072);
             
             // Send username
             byte[] usernameBytes = username.getBytes("UTF-8");
@@ -366,6 +377,9 @@ public class VideoCallWindow {
             myClientId = in.readInt();
             
             Platform.runLater(() -> statusLabel.setText("Connected (ID: " + myClientId + ")"));
+            
+            // Notify VideoCallManager that we are connected
+            VideoCallManager.getInstance().callConnected();
 
             senderThread = new Thread(() -> runVideoSender(out), "video-sender");
             senderThread.setDaemon(true);
@@ -398,8 +412,10 @@ public class VideoCallWindow {
             }
         } catch (IOException e) {
             Platform.runLater(() -> statusLabel.setText("Connection failed: " + e.getMessage()));
+            VideoCallManager.getInstance().callFailed(e.getMessage());
         } finally {
-            disconnectInternal();
+            // Use disconnect() which has the guard against double-call
+            disconnect();
         }
     }
 
@@ -412,13 +428,24 @@ public class VideoCallWindow {
             return;
         }
 
+        // Lower camera resolution for less latency
+        capture.set(3, 320);  // CV_CAP_PROP_FRAME_WIDTH
+        capture.set(4, 240);  // CV_CAP_PROP_FRAME_HEIGHT
+
         Mat frame = new Mat();
+        Mat flipped = new Mat();
         MatOfByte buffer = new MatOfByte();
+        // JPEG quality 40% — prioritize low latency over image quality
+        MatOfInt jpegParams = new MatOfInt(Imgcodecs.IMWRITE_JPEG_QUALITY, 40);
 
         AtomicReference<byte[]> latestFrame = new AtomicReference<>();
         Thread networkThread = new Thread(() -> runVideoNetworkSender(out, latestFrame), "video-network-sender");
         networkThread.setDaemon(true);
         networkThread.start();
+
+        // Local preview rate limiter
+        long lastLocalPreview = 0;
+        final long LOCAL_PREVIEW_INTERVAL_NS = 50_000_000L; // 50ms = 20fps for preview
 
         try {
             while (running && socket != null && !socket.isClosed()) {
@@ -427,10 +454,13 @@ public class VideoCallWindow {
                     continue;
                 }
 
+                // Flip horizontally (mirror) so the local user sees themselves correctly
+                Core.flip(frame, flipped, 1);
+
                 buffer.release();
                 buffer = new MatOfByte();
 
-                boolean encoded = Imgcodecs.imencode(".jpg", frame, buffer);
+                boolean encoded = Imgcodecs.imencode(".jpg", flipped, buffer, jpegParams);
                 if (!encoded) {
                     continue;
                 }
@@ -441,8 +471,10 @@ public class VideoCallWindow {
                     latestFrame.set(bytes);
                 }
 
-                // Show local preview
-                if (localView != null) {
+                // Show local preview at reduced rate
+                long now = System.nanoTime();
+                if (localView != null && (now - lastLocalPreview) >= LOCAL_PREVIEW_INTERVAL_NS) {
+                    lastLocalPreview = now;
                     Image localImage = new Image(new ByteArrayInputStream(bytes));
                     Platform.runLater(() -> localView.setImage(localImage));
                 }
@@ -454,7 +486,9 @@ public class VideoCallWindow {
                 }
             }
         } finally {
+            flipped.release();
             capture.release();
+            jpegParams.release();
             networkThread.interrupt();
         }
     }
@@ -570,7 +604,21 @@ public class VideoCallWindow {
     }
 
     public void disconnect() {
+        // Guard against double disconnect
+        if (!disconnected.compareAndSet(false, true)) {
+            System.out.println("⚠️ disconnect() already called, skipping");
+            return;
+        }
+        
         disconnectInternal();
+        
+        // Notify the VideoCallManager that the call is done
+        Runnable cb = onWindowClosed;
+        if (cb != null) {
+            onWindowClosed = null;
+            Platform.runLater(cb);
+        }
+        
         Platform.runLater(() -> {
             statusLabel.setText("Disconnected");
             stage.close();
@@ -683,10 +731,13 @@ public class VideoCallWindow {
 
     private void runAudioSession(String host, int port) {
         try (Socket s = new Socket(host, port);
-             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream()));
-             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream()))) {
+             DataInputStream in = new DataInputStream(new BufferedInputStream(s.getInputStream(), 16384));
+             DataOutputStream out = new DataOutputStream(new BufferedOutputStream(s.getOutputStream(), 16384))) {
 
             this.audioSocket = s;
+            s.setTcpNoDelay(true);
+            s.setSendBufferSize(65536);
+            s.setReceiveBufferSize(65536);
 
             final int myAudioId = in.readInt();
 
@@ -719,33 +770,13 @@ public class VideoCallWindow {
                     continue;
                 }
 
-                attenuatePcm16le(bytes, 0.15f);
-
-                ArrayBlockingQueue<byte[]> q = audioBuffers.computeIfAbsent(senderId, k -> new ArrayBlockingQueue<>(8));
+                // No attenuation needed — noise gate on sender side prevents feedback
+                ArrayBlockingQueue<byte[]> q = audioBuffers.computeIfAbsent(senderId, k -> new ArrayBlockingQueue<>(50));
                 q.offer(bytes);
             }
         } catch (IOException ignored) {
         } finally {
             audioRunning = false;
-        }
-    }
-
-    private void attenuatePcm16le(byte[] pcm, float gain) {
-        if (gain >= 0.999f) {
-            return;
-        }
-        for (int i = 0; i + 1 < pcm.length; i += 2) {
-            int lo = pcm[i] & 0xFF;
-            int hi = pcm[i + 1];
-            short s = (short) ((hi << 8) | lo);
-            int v = (int) (s * gain);
-            if (v > Short.MAX_VALUE) {
-                v = Short.MAX_VALUE;
-            } else if (v < Short.MIN_VALUE) {
-                v = Short.MIN_VALUE;
-            }
-            pcm[i] = (byte) (v & 0xFF);
-            pcm[i + 1] = (byte) ((v >> 8) & 0xFF);
         }
     }
 
@@ -756,7 +787,7 @@ public class VideoCallWindow {
         TargetDataLine mic;
         try {
             mic = (TargetDataLine) AudioSystem.getLine(info);
-            mic.open(fmt);
+            mic.open(fmt, AUDIO_BYTES_PER_FRAME * 6);
             mic.start();
         } catch (LineUnavailableException e) {
             System.err.println("Microphone unavailable: " + e.getMessage());
@@ -764,6 +795,9 @@ public class VideoCallWindow {
         }
 
         byte[] buf = new byte[AUDIO_BYTES_PER_FRAME];
+        // High-pass filter state (removes low-frequency rumble/hum)
+        float hpPrev = 0f;
+        float hpOut = 0f;
 
         try {
             while (audioRunning && audioSocket != null && !audioSocket.isClosed()) {
@@ -790,6 +824,26 @@ public class VideoCallWindow {
                     for (int i = 0; i < buf.length; i++) {
                         buf[i] = 0;
                     }
+                } else {
+                    // 1. Apply high-pass filter to remove low-frequency rumble/hum
+                    int samples = buf.length / 2;
+                    for (int i = 0; i < samples; i++) {
+                        int lo = buf[i * 2] & 0xFF;
+                        int hi = buf[i * 2 + 1];
+                        float sample = (float) ((short) ((hi << 8) | lo));
+
+                        hpOut = HP_FILTER_ALPHA * (hpOut + sample - hpPrev);
+                        hpPrev = sample;
+
+                        int v = Math.round(hpOut);
+                        if (v > Short.MAX_VALUE) v = Short.MAX_VALUE;
+                        if (v < Short.MIN_VALUE) v = Short.MIN_VALUE;
+                        buf[i * 2] = (byte) (v & 0xFF);
+                        buf[i * 2 + 1] = (byte) ((v >> 8) & 0xFF);
+                    }
+
+                    // 2. Apply smooth noise gate (with fade in/out)
+                    applyNoiseGate(buf);
                 }
 
                 synchronized (out) {
@@ -805,14 +859,82 @@ public class VideoCallWindow {
         }
     }
 
+    /**
+     * Smooth noise gate: if the RMS amplitude of the frame is below
+     * the threshold, fade the frame to silence instead of cutting abruptly.
+     * This prevents audible "click" artifacts at gate boundaries.
+     */
+    private boolean noiseGateOpen = true;
+
+    private void applyNoiseGate(byte[] pcm) {
+        int sampleCount = pcm.length / 2;
+
+        // Compute RMS amplitude (more accurate than average absolute)
+        long sumSquares = 0;
+        for (int i = 0; i + 1 < pcm.length; i += 2) {
+            int lo = pcm[i] & 0xFF;
+            int hi = pcm[i + 1];
+            short s = (short) ((hi << 8) | lo);
+            sumSquares += (long) s * s;
+        }
+        double rms = Math.sqrt((double) sumSquares / Math.max(1, sampleCount));
+
+        boolean shouldBeOpen = rms >= NOISE_GATE_THRESHOLD;
+
+        if (!shouldBeOpen && !noiseGateOpen) {
+            // Gate was closed and stays closed — silence
+            for (int i = 0; i < pcm.length; i++) {
+                pcm[i] = 0;
+            }
+            return;
+        }
+
+        if (shouldBeOpen && noiseGateOpen) {
+            // Gate was open and stays open — pass through
+            return;
+        }
+
+        // Transition: apply fade in or fade out
+        int fadeSamples = Math.min(NOISE_GATE_FADE_SAMPLES, sampleCount);
+
+        if (!shouldBeOpen && noiseGateOpen) {
+            // Closing: fade out at end of frame
+            noiseGateOpen = false;
+            int fadeStart = sampleCount - fadeSamples;
+            for (int i = fadeStart; i < sampleCount; i++) {
+                float factor = 1.0f - (float)(i - fadeStart) / fadeSamples;
+                int lo = pcm[i * 2] & 0xFF;
+                int hi = pcm[i * 2 + 1];
+                short s = (short) ((hi << 8) | lo);
+                int v = Math.round(s * factor);
+                pcm[i * 2] = (byte) (v & 0xFF);
+                pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xFF);
+            }
+        } else {
+            // Opening: fade in at start of frame
+            noiseGateOpen = true;
+            for (int i = 0; i < fadeSamples; i++) {
+                float factor = (float) i / fadeSamples;
+                int lo = pcm[i * 2] & 0xFF;
+                int hi = pcm[i * 2 + 1];
+                short s = (short) ((hi << 8) | lo);
+                int v = Math.round(s * factor);
+                pcm[i * 2] = (byte) (v & 0xFF);
+                pcm[i * 2 + 1] = (byte) ((v >> 8) & 0xFF);
+            }
+        }
+    }
+
     private void runAudioMixer() {
         AudioFormat fmt = audioFormat();
         DataLine.Info info = new DataLine.Info(SourceDataLine.class, fmt);
 
         SourceDataLine speakers;
         try {
+            // Buffer for ~120ms of audio at 44.1kHz (3 frames * 3528 bytes)
+            int bufferSize = AUDIO_BYTES_PER_FRAME * 3;
             speakers = (SourceDataLine) AudioSystem.getLine(info);
-            speakers.open(fmt);
+            speakers.open(fmt, bufferSize);
             speakers.start();
         } catch (LineUnavailableException e) {
             System.err.println("Speakers unavailable: " + e.getMessage());
@@ -821,7 +943,7 @@ public class VideoCallWindow {
 
         try {
             FloatControl gain = (FloatControl) speakers.getControl(FloatControl.Type.MASTER_GAIN);
-            float targetDb = -15.0f;
+            float targetDb = -1.5f; // Slightly louder than before (-3dB) for clarity
             float clamped = Math.max(gain.getMinimum(), Math.min(gain.getMaximum(), targetDb));
             gain.setValue(clamped);
         } catch (IllegalArgumentException ignored) {
@@ -837,7 +959,6 @@ public class VideoCallWindow {
                 }
 
                 boolean any = false;
-                int activeStreams = 0;
                 for (ArrayBlockingQueue<byte[]> q : audioBuffers.values()) {
                     byte[] frame = q.poll();
                     if (frame == null) {
@@ -849,7 +970,6 @@ public class VideoCallWindow {
                     }
 
                     any = true;
-                    activeStreams++;
 
                     int samples = Math.min(mix.length, frame.length / 2);
                     for (int i = 0; i < samples; i++) {
@@ -861,17 +981,26 @@ public class VideoCallWindow {
                 }
 
                 if (!any) {
+                    // No audio data available — write silence and yield briefly
                     for (int i = 0; i < mixedBytes.length; i++) {
                         mixedBytes[i] = 0;
                     }
+                    speakers.write(mixedBytes, 0, mixedBytes.length);
+                    try {
+                        Thread.sleep(AUDIO_FRAME_MS / 2);
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                    continue;
                 } else {
-                    int divisor = Math.max(1, activeStreams);
+                    // Soft-clipping: use tanh-based soft limiter instead of hard clamp
+                    // This produces smoother distortion when multiple streams mix
                     for (int i = 0; i < mix.length; i++) {
-                        int v = mix[i] / divisor;
-                        if (v > Short.MAX_VALUE) {
-                            v = Short.MAX_VALUE;
-                        } else if (v < Short.MIN_VALUE) {
-                            v = Short.MIN_VALUE;
+                        int v = mix[i];
+                        if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
+                            // Soft clip using tanh curve
+                            double normalized = (double) v / Short.MAX_VALUE;
+                            v = (int) (Math.tanh(normalized) * Short.MAX_VALUE);
                         }
                         mixedBytes[i * 2] = (byte) (v & 0xFF);
                         mixedBytes[i * 2 + 1] = (byte) ((v >> 8) & 0xFF);

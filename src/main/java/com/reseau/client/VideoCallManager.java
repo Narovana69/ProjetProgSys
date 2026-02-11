@@ -57,11 +57,10 @@ public class VideoCallManager {
         
         // Set callback to clean up when window closes
         window.setOnWindowClosed(() -> {
-            // No nested synchronization, just atomically update references
-            if (activeCallWindow.compareAndSet(window, null)) {
-                callState.set(CallState.IDLE);
-                System.out.println("✅ Video call closed and manager reset");
-            }
+            // Atomically reset references
+            activeCallWindow.compareAndSet(window, null);
+            callState.set(CallState.IDLE);
+            System.out.println("✅ Video call closed and manager reset to IDLE");
         });
         
         System.out.println("📞 Video call starting...");
@@ -84,14 +83,9 @@ public class VideoCallManager {
         callState.set(CallState.FAILED);
         System.err.println("❌ Video call failed: " + reason);
         
-        VideoCallWindow window = activeCallWindow.getAndSet(null);
-        if (window != null) {
-            try {
-                window.disconnect();
-            } catch (Exception e) {
-                System.err.println("Error disconnecting failed call: " + e.getMessage());
-            }
-        }
+        // Just clear the reference, disconnect() is already called by VideoCallWindow
+        activeCallWindow.set(null);
+        callState.set(CallState.IDLE);
     }
     
     /**

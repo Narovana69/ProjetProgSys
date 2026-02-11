@@ -1,7 +1,7 @@
 com/reseau/client/ChatWindow$1.class
-com/reseau/common/UserAccount.class
 com/reseau/video/VideoStreamServer.class
 com/reseau/server/ClientHandler.class
+com/reseau/common/UserAccount.class
 com/reseau/client/VideoCallManager.class
 com/reseau/client/ChatWindow.class
 com/reseau/client/Client.class
@@ -17,10 +17,12 @@ com/reseau/video/AudioStreamServer.class
 com/reseau/client/ChatWindow$2.class
 com/reseau/client/AuthLoginWindow.class
 com/reseau/server/PresenceService.class
-com/reseau/client/Client$MessageListener.class
+com/reseau/client/ChatWindow$PrivateMessageData.class
 com/reseau/client/RegistrationWindow.class
+com/reseau/client/Client$MessageListener.class
 com/reseau/server/DiskManager.class
 com/reseau/common/UserInfo.class
 com/reseau/client/VideoCallWindow$RemoteTileState.class
-com/reseau/client/LoginWindow.class
 com/reseau/server/AuthenticationService.class
+com/reseau/client/ClientConfig.class
+com/reseau/client/LoginWindow.class

@@ -15,10 +15,10 @@ import com.reseau.video.VideoStreamServer;
 
 /**
  * NEXO Server - Handles client connections and message routing
- * Uses TCP sockets on port 8080 with thread pool for concurrent clients
+ * Uses TCP sockets on port 4444 with thread pool for concurrent clients
  */
 public class Server {
-    private static final int PORT = 8080;
+    private static final int PORT = 4444;
     private static final int MAX_CLIENTS = 20;
     
     private ServerSocket serverSocket;

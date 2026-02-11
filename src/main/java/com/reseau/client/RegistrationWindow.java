@@ -3,15 +3,15 @@ package com.reseau.client;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
-import javafx.scene.control.*;
-import javafx.scene.layout.HBox;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.PasswordField;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TextField;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-
-import java.io.*;
-import java.util.Properties;
 
 /**
  * RegistrationWindow - User signup interface
@@ -27,7 +27,6 @@ public class RegistrationWindow {
     private Button registerButton;
     private Button backButton;
     private Label statusLabel;
-    private static final String CONFIG_FILE = ".nexo_config.properties";
 
     public RegistrationWindow(Stage stage) {
         this.stage = stage;
@@ -320,23 +319,22 @@ public class RegistrationWindow {
     }
 
     private void saveLastServer(String server) {
-        Properties props = new Properties();
-        props.setProperty("last.server", server);
-        try (OutputStream os = new FileOutputStream(CONFIG_FILE)) {
-            props.store(os, "NEXO Client Configuration");
-        } catch (IOException e) {
-            System.err.println("Error saving config: " + e.getMessage());
+        // Use ClientConfig to save - don't overwrite the whole config file!
+        ClientConfig config = ClientConfig.getInstance();
+        String[] parts = server.split(":");
+        if (parts.length == 2) {
+            config.setServerHost(parts[0]);
+            try {
+                config.setServerPort(Integer.parseInt(parts[1]));
+            } catch (NumberFormatException e) {
+                // ignore
+            }
         }
     }
 
     private String loadLastServer() {
-        Properties props = new Properties();
-        try (InputStream is = new FileInputStream(CONFIG_FILE)) {
-            props.load(is);
-            return props.getProperty("last.server", "localhost:8080");
-        } catch (IOException e) {
-            return "localhost:8080";
-        }
+        ClientConfig config = ClientConfig.getInstance();
+        return config.getServerHost() + ":" + config.getServerPort();
     }
 
     public void show() {

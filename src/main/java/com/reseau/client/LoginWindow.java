@@ -96,7 +96,7 @@ public class LoginWindow {
             "-fx-letter-spacing: 1px;"
         );
         
-        serverField = new TextField("localhost:8080");
+        serverField = new TextField("localhost:4444");
         serverField.setPromptText("host:port");
         serverField.setPrefWidth(350);
         serverField.setPrefHeight(45);

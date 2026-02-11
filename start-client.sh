@@ -17,10 +17,17 @@ for module in javafx-base javafx-controls javafx-graphics javafx-fxml; do
 done
 MODULE_PATH="${MODULE_PATH:1}"
 
+# Build classpath with all Maven dependencies (includes OpenCV)
+OPENCV_JAR="$HOME/.m2/repository/org/openpnp/opencv/4.7.0-0/opencv-4.7.0-0.jar"
+EXTRA_CP=""
+if [ -f "$OPENCV_JAR" ]; then
+    EXTRA_CP=":$OPENCV_JAR"
+fi
+
 java \
     -Xms128m \
     -Xmx512m \
     --module-path "$MODULE_PATH" \
     --add-modules javafx.controls,javafx.fxml \
-    -cp "target/classes" \
+    -cp "target/classes${EXTRA_CP}" \
     com.reseau.client.ClientApp
