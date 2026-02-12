@@ -11,10 +11,6 @@ import javafx.stage.Stage;
 
 import java.io.*;
 import java.util.Properties;
-
-/**
- * AuthLoginWindow - Authenticated login interface with username and password
- */
 public class AuthLoginWindow {
     private Stage stage;
     private TextField usernameField;

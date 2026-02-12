@@ -2,8 +2,10 @@ package com.reseau.client;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import com.reseau.common.UserInfo;
 
@@ -68,6 +70,22 @@ public class ChatWindow {
     // Store private message history per user
     private Map<String, List<PrivateMessageData>> privateMessageHistory = new HashMap<>();
     
+    // Friend system
+    private Set<String> friendsList = new HashSet<>();
+    private List<PendingFriendRequest> pendingFriendRequests = new ArrayList<>();
+    private Map<String, Boolean> friendshipCache = new HashMap<>(); // username -> isFriend
+    
+    // Helper class for pending friend requests
+    private static class PendingFriendRequest {
+        String requestId;
+        String senderUsername;
+        
+        PendingFriendRequest(String requestId, String senderUsername) {
+            this.requestId = requestId;
+            this.senderUsername = senderUsername;
+        }
+    }
+    
     // Helper class to store message data
     private static class PrivateMessageData {
         String sender;
@@ -111,6 +129,8 @@ public class ChatWindow {
             try {
                 Thread.sleep(500); // Wait for connection to stabilize
                 client.refreshUserList();
+                client.requestFriendsList(); // Request friends list
+                client.requestPendingRequests(); // Request pending friend requests
             } catch (InterruptedException e) {
                 e.printStackTrace();
             }
@@ -445,6 +465,12 @@ public class ChatWindow {
             "-fx-padding: 5 10;"
         );
         HBox.setHgrow(searchField, Priority.ALWAYS);
+        
+        // Add listener to filter DM contacts in real-time
+        searchField.textProperty().addListener((obs, oldVal, newVal) -> {
+            filterDmList(newVal.toLowerCase().trim());
+        });
+        
         searchContainer.getChildren().add(searchField);
         
         // DM Header
@@ -1177,9 +1203,34 @@ public class ChatWindow {
         
         channelSection.getChildren().addAll(channelHeader, generalChannel);
         
+        // Search bar for users
+        HBox searchContainer = new HBox();
+        searchContainer.setPadding(new Insets(10, 10, 5, 10));
+        
+        TextField userSearchField = new TextField();
+        userSearchField.setPromptText("Search users...");
+        userSearchField.setPrefHeight(28);
+        userSearchField.setStyle(
+            "-fx-background-color: " + DISCORD_BG_NAVBAR + "; " +
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
+            "-fx-prompt-text-fill: " + DISCORD_TEXT_MUTED + "; " +
+            "-fx-background-radius: 4; " +
+            "-fx-border-width: 0; " +
+            "-fx-font-size: 12px; " +
+            "-fx-padding: 5 10;"
+        );
+        HBox.setHgrow(userSearchField, Priority.ALWAYS);
+        
+        // Add listener to filter users in real-time
+        userSearchField.textProperty().addListener((obs, oldVal, newVal) -> {
+            filterGlobalUserList(newVal.toLowerCase().trim());
+        });
+        
+        searchContainer.getChildren().add(userSearchField);
+        
         // Online users header
         HBox usersHeader = new HBox();
-        usersHeader.setPadding(new Insets(15, 10, 5, 15));
+        usersHeader.setPadding(new Insets(10, 10, 5, 15));
         usersHeader.setAlignment(Pos.CENTER_LEFT);
         
         Label usersTitle = new Label("ONLINE USERS");
@@ -1208,7 +1259,7 @@ public class ChatWindow {
         );
         VBox.setVgrow(userScroll, Priority.ALWAYS);
         
-        sidebar.getChildren().addAll(headerBox, channelSection, usersHeader, userScroll);
+        sidebar.getChildren().addAll(headerBox, channelSection, searchContainer, usersHeader, userScroll);
         
         return sidebar;
     }
@@ -1599,6 +1650,54 @@ public class ChatWindow {
             displayHistoryMessage(message);
             return;
         }
+        
+        // Handle friend request notifications
+        if (message.startsWith("FRIEND_REQUEST_RECEIVED ")) {
+            handleFriendRequestReceived(message);
+            return;
+        }
+        
+        if (message.startsWith("FRIEND_REQUEST_SENT")) {
+            Platform.runLater(() -> showTemporaryMessage("✅ Friend request sent!"));
+            return;
+        }
+        
+        if (message.startsWith("FRIEND_REQUEST_FAILED")) {
+            // Parse the failure reason
+            String[] parts = message.split(" ", 3);
+            if (parts.length >= 3) {
+                String reason = parts[2];
+                Platform.runLater(() -> showTemporaryMessage("❌ " + reason));
+            } else {
+                Platform.runLater(() -> showTemporaryMessage("❌ Friend request failed"));
+            }
+            return;
+        }
+        
+        if (message.startsWith("FRIEND_ACCEPTED ")) {
+            handleFriendAccepted(message);
+            return;
+        }
+        
+        if (message.startsWith("FRIEND_REJECTED")) {
+            Platform.runLater(() -> showTemporaryMessage("Friend request was rejected"));
+            return;
+        }
+        
+        if (message.startsWith("FRIENDSHIP_STATUS ")) {
+            handleFriendshipStatus(message);
+            return;
+        }
+        
+        if (message.startsWith("PENDING_REQUEST ")) {
+            handlePendingRequest(message);
+            return;
+        }
+        
+        if (message.startsWith("FRIENDS_LIST ")) {
+            handleFriendsList(message);
+            return;
+        }
 
         // Parse message format: MESSAGE <sender> <recipient> <text>
         if (message.startsWith("MESSAGE ")) {
@@ -1617,13 +1716,13 @@ public class ChatWindow {
                     String otherUser = sender.equals(client.getUsername()) ? recipient : sender;
                     boolean isOwnMessage = sender.equals(client.getUsername());
                     
-                    // Skip if it's our own message (already displayed when sent)
+                    // ✅ Store in history (for both sent and received messages)
+                    storePrivateMessage(otherUser, sender, text, timestamp, isOwnMessage);
+                    
+                    // Skip displaying if it's our own message (already displayed when sent)
                     if (isOwnMessage) {
                         return;
                     }
-                    
-                    // Store in history (only for received messages)
-                    storePrivateMessage(otherUser, sender, text, timestamp, false);
                     
                     // Add to DM contacts if not there
                     if (!dmContacts.contains(otherUser)) {
@@ -1713,9 +1812,12 @@ public class ChatWindow {
                         System.out.println("DEBUG: Parsing user entry: " + part);
                         UserInfo userInfo = UserInfo.fromString(part);
                         if (userInfo != null) {
-                            Label userLabel = createUserLabel(userInfo);
-                            newUserLabels.put(userInfo.getUsername(), userLabel);
-                            System.out.println("DEBUG: Added user: " + userInfo.getUsername());
+                            // ✅ Skip our own username from the list
+                            if (!userInfo.getUsername().equals(client.getUsername())) {
+                                Label userLabel = createUserLabel(userInfo);
+                                newUserLabels.put(userInfo.getUsername(), userLabel);
+                                System.out.println("DEBUG: Added user: " + userInfo.getUsername());
+                            }
                         } else {
                             System.err.println("DEBUG: Failed to parse user entry: " + part);
                         }
@@ -1802,11 +1904,22 @@ public class ChatWindow {
                 "-fx-padding: 6px 8px; " +
                 "-fx-cursor: hand;");
         
-        // Click to open private chat
+        // Click to show user profile (with friend request option)
         final String username = userInfo.getUsername();
         container.setOnMouseClicked(e -> {
-            System.out.println("Opening private chat with: " + username);
-            openPrivateChat(username);
+            if (e.getClickCount() == 1) {
+                // Single click - show profile
+                System.out.println("Showing profile for: " + username);
+                showUserProfile(username);
+            } else if (e.getClickCount() == 2) {
+                // Double click - open private chat (only if friends)
+                if (isFriend(username)) {
+                    System.out.println("Opening private chat with friend: " + username);
+                    openPrivateChat(username);
+                } else {
+                    showTemporaryMessage("⚠️ You must be friends to send messages!");
+                }
+            }
         });
         
         // Hover effect with Discord dark theme
@@ -2150,16 +2263,360 @@ public class ChatWindow {
         if (parts.length >= 5) {
             try {
                 String sender = parts[2];
+                String recipient = parts[3];
                 String text = parts[4];
                 
-                // Add Discord-style message for history
-                Platform.runLater(() -> addGlobalChatMessage(sender, text));
-                messageCount++;
+                // ✅ CORRECTION: Only display global messages in global chat
+                // Private messages should not appear in global chat history
+                if (recipient.equals("all")) {
+                    // Add Discord-style message for history (global chat only)
+                    Platform.runLater(() -> addGlobalChatMessage(sender, text));
+                    messageCount++;
+                } else {
+                    // Private message from history - store it but don't display in global chat
+                    String timestamp = java.time.LocalTime.now().format(
+                        java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+                    
+                    // Determine the other user
+                    String otherUser = sender.equals(client.getUsername()) ? recipient : sender;
+                    boolean isOwnMessage = sender.equals(client.getUsername());
+                    
+                    // Store in private message history
+                    storePrivateMessage(otherUser, sender, text, timestamp, isOwnMessage);
+                    
+                    // Add to DM contacts if not there
+                    if (!dmContacts.contains(otherUser)) {
+                        dmContacts.add(otherUser);
+                    }
+                }
                 
             } catch (Exception e) {
                 System.err.println("Failed to parse history message: " + e.getMessage());
             }
         }
+    }
+    
+    /**
+     * Filter global chat user list based on search text
+     */
+    private void filterGlobalUserList(String searchText) {
+        Platform.runLater(() -> {
+            userListContainer.getChildren().clear();
+            
+            if (searchText.isEmpty()) {
+                // Show all users when search is empty
+                userListContainer.getChildren().setAll(userLabels.values());
+            } else {
+                // Show only matching users
+                for (Map.Entry<String, Label> entry : userLabels.entrySet()) {
+                    String username = entry.getKey();
+                    if (username.toLowerCase().contains(searchText)) {
+                        userListContainer.getChildren().add(entry.getValue());
+                    }
+                }
+            }
+        });
+    }
+    
+    /**
+     * Filter DM contact list based on search text
+     */
+    private void filterDmList(String searchText) {
+        if (dmListContainer == null) return;
+        
+        Platform.runLater(() -> {
+            // Store all DM entries temporarily
+            List<javafx.scene.Node> allEntries = new ArrayList<>(dmListContainer.getChildren());
+            dmListContainer.getChildren().clear();
+            
+            if (searchText.isEmpty()) {
+                // Show all DM contacts when search is empty
+                dmListContainer.getChildren().setAll(allEntries);
+            } else {
+                // Filter DM contacts
+                for (javafx.scene.Node node : allEntries) {
+                    if (node instanceof HBox) {
+                        HBox entry = (HBox) node;
+                        // Find the username label (second child after avatar)
+                        if (entry.getChildren().size() >= 2) {
+                            javafx.scene.Node secondChild = entry.getChildren().get(1);
+                            if (secondChild instanceof Label) {
+                                Label nameLabel = (Label) secondChild;
+                                String username = nameLabel.getText();
+                                if (username.toLowerCase().contains(searchText)) {
+                                    dmListContainer.getChildren().add(entry);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+    
+    /**
+     * Handle incoming friend request
+     */
+    private void handleFriendRequestReceived(String message) {
+        // Format: FRIEND_REQUEST_RECEIVED <requestId> <senderUsername>
+        String[] parts = message.split(" ", 3);
+        if (parts.length >= 3) {
+            String requestId = parts[1];
+            String senderUsername = parts[2];
+            
+            PendingFriendRequest request = new PendingFriendRequest(requestId, senderUsername);
+            pendingFriendRequests.add(request);
+            
+            Platform.runLater(() -> {
+                showFriendRequestNotification(senderUsername, requestId);
+            });
+        }
+    }
+    
+    /**
+     * Show friend request notification dialog
+     */
+    private void showFriendRequestNotification(String senderUsername, String requestId) {
+        VBox notification = new VBox(15);
+        notification.setAlignment(Pos.CENTER);
+        notification.setPadding(new Insets(30));
+        notification.setStyle(
+            "-fx-background-color: white; " +
+            "-fx-background-radius: 15px; " +
+            "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 20, 0, 0, 5);"
+        );
+        notification.setMaxWidth(400);
+        
+        Label icon = new Label("👤");
+        icon.setStyle("-fx-font-size: 48px;");
+        
+        Label title = new Label("Friend Request");
+        title.setStyle("-fx-font-size: 20px; -fx-font-weight: bold; -fx-text-fill: #667eea;");
+        
+        Label message = new Label(senderUsername + " wants to be your friend!");
+        message.setStyle("-fx-font-size: 14px; -fx-text-fill: #333;");
+        message.setWrapText(true);
+        message.setAlignment(Pos.CENTER);
+        
+        HBox buttons = new HBox(15);
+        buttons.setAlignment(Pos.CENTER);
+        
+        Button acceptBtn = new Button("✓ Accept");
+        acceptBtn.setStyle(
+            "-fx-background-color: #23a55a; " +
+            "-fx-text-fill: white; " +
+            "-fx-font-size: 14px; " +
+            "-fx-font-weight: bold; " +
+            "-fx-padding: 10 25; " +
+            "-fx-background-radius: 8; " +
+            "-fx-cursor: hand;"
+        );
+        acceptBtn.setOnAction(e -> {
+            client.acceptFriendRequest(requestId);
+            pendingFriendRequests.removeIf(r -> r.requestId.equals(requestId));
+            closeNotification();
+        });
+        
+        Button rejectBtn = new Button("✕ Reject");
+        rejectBtn.setStyle(
+            "-fx-background-color: #ed4245; " +
+            "-fx-text-fill: white; " +
+            "-fx-font-size: 14px; " +
+            "-fx-font-weight: bold; " +
+            "-fx-padding: 10 25; " +
+            "-fx-background-radius: 8; " +
+            "-fx-cursor: hand;"
+        );
+        rejectBtn.setOnAction(e -> {
+            client.rejectFriendRequest(requestId);
+            pendingFriendRequests.removeIf(r -> r.requestId.equals(requestId));
+            closeNotification();
+        });
+        
+        buttons.getChildren().addAll(acceptBtn, rejectBtn);
+        notification.getChildren().addAll(icon, title, message, buttons);
+        
+        VBox overlay = new VBox(notification);
+        overlay.setAlignment(Pos.CENTER);
+        overlay.setStyle("-fx-background-color: rgba(0, 0, 0, 0.5);");
+        
+        BorderPane root = (BorderPane) stage.getScene().getRoot();
+        root.setCenter(overlay);
+    }
+    
+    private void closeNotification() {
+        BorderPane root = (BorderPane) stage.getScene().getRoot();
+        root.setCenter(mainContent);
+    }
+    
+    /**
+     * Handle friend request accepted
+     */
+    private void handleFriendAccepted(String message) {
+        // Format: FRIEND_ACCEPTED <username>
+        String[] parts = message.split(" ", 2);
+        if (parts.length >= 2) {
+            String friendUsername = parts[1];
+            friendsList.add(friendUsername);
+            friendshipCache.put(friendUsername, true);
+            
+            Platform.runLater(() -> {
+                showTemporaryMessage("🎉 You are now friends with " + friendUsername + "!");
+            });
+        }
+    }
+    
+    /**
+     * Handle friendship status response
+     */
+    private void handleFriendshipStatus(String message) {
+        // Format: FRIENDSHIP_STATUS <user1> <user2> <true/false>
+        String[] parts = message.split(" ");
+        if (parts.length >= 4) {
+            String user2 = parts[2];
+            boolean areFriends = Boolean.parseBoolean(parts[3]);
+            friendshipCache.put(user2, areFriends);
+        }
+    }
+    
+    /**
+     * Handle pending friend request
+     */
+    private void handlePendingRequest(String message) {
+        // Format: PENDING_REQUEST <requestId> <senderUsername>
+        String[] parts = message.split(" ", 3);
+        if (parts.length >= 3) {
+            String requestId = parts[1];
+            String senderUsername = parts[2];
+            PendingFriendRequest request = new PendingFriendRequest(requestId, senderUsername);
+            if (!pendingFriendRequests.contains(request)) {
+                pendingFriendRequests.add(request);
+            }
+        }
+    }
+    
+    /**
+     * Handle friends list response
+     */
+    private void handleFriendsList(String message) {
+        // Format: FRIENDS_LIST <username> <friend1> <friend2> ...
+        String[] parts = message.split(" ");
+        if (parts.length >= 2) {
+            friendsList.clear();
+            for (int i = 2; i < parts.length; i++) {
+                String friend = parts[i];
+                friendsList.add(friend);
+                friendshipCache.put(friend, true);
+            }
+            System.out.println("Updated friends list: " + friendsList);
+        }
+    }
+    
+    /**
+     * Check if user is a friend
+     */
+    private boolean isFriend(String username) {
+        return friendshipCache.getOrDefault(username, false);
+    }
+    
+    /**
+     * Show user profile dialog with friend request button
+     */
+    private void showUserProfile(String username) {
+        // ✅ Ne pas afficher le profil si c'est nous-même
+        if (username.equals(client.getUsername())) {
+            showTemporaryMessage("👤 This is your own profile!");
+            return;
+        }
+        
+        // Check friendship status first
+        client.checkFriendship(username);
+        
+        // Wait a bit for response
+        new Thread(() -> {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            
+            Platform.runLater(() -> {
+                VBox profileDialog = new VBox(20);
+                profileDialog.setAlignment(Pos.CENTER);
+                profileDialog.setPadding(new Insets(30));
+                profileDialog.setStyle(
+                    "-fx-background-color: white; " +
+                    "-fx-background-radius: 15px; " +
+                    "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 20, 0, 0, 5);"
+                );
+                profileDialog.setMaxWidth(350);
+                
+                Label avatar = new Label(getAvatarEmoji(username));
+                avatar.setStyle("-fx-font-size: 64px;");
+                
+                Label nameLabel = new Label(username);
+                nameLabel.setStyle("-fx-font-size: 24px; -fx-font-weight: bold; -fx-text-fill: #333;");
+                
+                HBox buttons = new HBox(10);
+                buttons.setAlignment(Pos.CENTER);
+                
+                if (isFriend(username)) {
+                    // Already friends - show message button
+                    Button messageBtn = new Button("💬 Send Message");
+                    messageBtn.setStyle(
+                        "-fx-background-color: #5865f2; " +
+                        "-fx-text-fill: white; " +
+                        "-fx-font-size: 14px; " +
+                        "-fx-padding: 10 20; " +
+                        "-fx-background-radius: 8; " +
+                        "-fx-cursor: hand;"
+                    );
+                    messageBtn.setOnAction(e -> {
+                        openPrivateChat(username);
+                        closeNotification();
+                    });
+                    buttons.getChildren().add(messageBtn);
+                } else {
+                    // Not friends - show friend request button
+                    Button friendRequestBtn = new Button("➕ Add Friend");
+                    friendRequestBtn.setStyle(
+                        "-fx-background-color: #23a55a; " +
+                        "-fx-text-fill: white; " +
+                        "-fx-font-size: 14px; " +
+                        "-fx-padding: 10 20; " +
+                        "-fx-background-radius: 8; " +
+                        "-fx-cursor: hand;"
+                    );
+                    friendRequestBtn.setOnAction(e -> {
+                        client.sendFriendRequest(username);
+                        closeNotification();
+                        showTemporaryMessage("Friend request sent to " + username);
+                    });
+                    buttons.getChildren().add(friendRequestBtn);
+                }
+                
+                Button closeBtn = new Button("Close");
+                closeBtn.setStyle(
+                    "-fx-background-color: #4f545c; " +
+                    "-fx-text-fill: white; " +
+                    "-fx-font-size: 14px; " +
+                    "-fx-padding: 10 20; " +
+                    "-fx-background-radius: 8; " +
+                    "-fx-cursor: hand;"
+                );
+                closeBtn.setOnAction(e -> closeNotification());
+                buttons.getChildren().add(closeBtn);
+                
+                profileDialog.getChildren().addAll(avatar, nameLabel, buttons);
+                
+                VBox overlay = new VBox(profileDialog);
+                overlay.setAlignment(Pos.CENTER);
+                overlay.setStyle("-fx-background-color: rgba(0, 0, 0, 0.5);");
+                
+                BorderPane root = (BorderPane) stage.getScene().getRoot();
+                root.setCenter(overlay);
+            });
+        }).start();
     }
 
     public void show() {

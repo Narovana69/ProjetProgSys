@@ -27,6 +27,7 @@ public class Server {
     private PresenceService presenceService;
     private AuthenticationService authService;
     private MessageStorage messageStorage;
+    private FriendshipService friendshipService;
     private volatile boolean running;
 
     public Server() {
@@ -37,6 +38,7 @@ public class Server {
         this.presenceService = new PresenceService(this);
         this.authService = new AuthenticationService();
         this.messageStorage = new MessageStorage();
+        this.friendshipService = new FriendshipService();
         this.running = false;
     }
 
@@ -134,6 +136,10 @@ public class Server {
 
     public MessageStorage getMessageStorage() {
         return messageStorage;
+    }
+
+    public FriendshipService getFriendshipService() {
+        return friendshipService;
     }
 
     /**

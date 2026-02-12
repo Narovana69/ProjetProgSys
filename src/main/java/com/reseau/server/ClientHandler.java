@@ -207,6 +207,58 @@ public class ClientHandler implements Runnable {
                 sendUserList();
                 break;
                 
+            case "FRIEND_REQUEST":
+                // Format: FRIEND_REQUEST <sender> <receiver>
+                if (parts.length >= 3) {
+                    String sender = parts[1];
+                    String receiver = parts[2];
+                    handleFriendRequest(sender, receiver);
+                }
+                break;
+                
+            case "ACCEPT_FRIEND":
+                // Format: ACCEPT_FRIEND <requestId> <username>
+                if (parts.length >= 3) {
+                    String requestId = parts[1];
+                    String accepter = parts[2];
+                    handleAcceptFriend(requestId, accepter);
+                }
+                break;
+                
+            case "REJECT_FRIEND":
+                // Format: REJECT_FRIEND <requestId> <username>
+                if (parts.length >= 3) {
+                    String requestId = parts[1];
+                    String rejecter = parts[2];
+                    handleRejectFriend(requestId, rejecter);
+                }
+                break;
+                
+            case "GET_FRIENDS":
+                // Format: GET_FRIENDS <username>
+                if (parts.length >= 2) {
+                    String requester = parts[1];
+                    handleGetFriends(requester);
+                }
+                break;
+                
+            case "GET_PENDING_REQUESTS":
+                // Format: GET_PENDING_REQUESTS <username>
+                if (parts.length >= 2) {
+                    String requester = parts[1];
+                    handleGetPendingRequests(requester);
+                }
+                break;
+                
+            case "CHECK_FRIENDSHIP":
+                // Format: CHECK_FRIENDSHIP <username1> <username2>
+                if (parts.length >= 3) {
+                    String user1 = parts[1];
+                    String user2 = parts[2];
+                    handleCheckFriendship(user1, user2);
+                }
+                break;
+                
             case "DISCONNECT":
                 running = false;
                 break;
@@ -260,6 +312,115 @@ public class ClientHandler implements Runnable {
         } catch (Exception e) {
             System.err.println("Failed to send message history: " + e.getMessage());
         }
+    }
+    
+    /**
+     * Handle friend request
+     */
+    private void handleFriendRequest(String sender, String receiver) {
+        // ✅ Check if trying to add themselves
+        if (sender.equals(receiver)) {
+            sendMessage("FRIEND_REQUEST_FAILED " + receiver + " You cannot add yourself as a friend");
+            System.out.println("Blocked self-friend request from: " + sender);
+            return;
+        }
+        
+        com.reseau.common.FriendRequest request = server.getFriendshipService().sendFriendRequest(sender, receiver);
+        if (request != null) {
+            // Notify sender
+            sendMessage("FRIEND_REQUEST_SENT " + receiver);
+            // Notify receiver
+            server.sendToClient(receiver, "FRIEND_REQUEST_RECEIVED " + request.getRequestId() + " " + sender);
+            System.out.println("Friend request: " + sender + " -> " + receiver);
+        } else {
+            sendMessage("FRIEND_REQUEST_FAILED " + receiver + " Already friends or pending");
+        }
+    }
+    
+    /**
+     * Handle accept friend request
+     */
+    private void handleAcceptFriend(String requestId, String username) {
+        boolean success = server.getFriendshipService().acceptFriendRequest(requestId, username);
+        if (success) {
+            // Get request details to notify both users
+            com.reseau.common.FriendRequest request = server.getFriendshipService()
+                .getSentRequests(username).stream()
+                .filter(r -> r.getRequestId().equals(requestId))
+                .findFirst()
+                .orElse(null);
+            
+            if (request == null) {
+                // Check in received requests
+                request = server.getFriendshipService()
+                    .getPendingRequests(username).stream()
+                    .filter(r -> r.getRequestId().equals(requestId))
+                    .findFirst()
+                    .orElse(null);
+            }
+            
+            if (request != null) {
+                String sender = request.getSenderUsername();
+                String receiver = request.getReceiverUsername();
+                
+                // Notify both users
+                server.sendToClient(sender, "FRIEND_ACCEPTED " + receiver);
+                server.sendToClient(receiver, "FRIEND_ACCEPTED " + sender);
+                System.out.println("Friend request accepted: " + sender + " <-> " + receiver);
+            }
+        } else {
+            sendMessage("FRIEND_ACCEPT_FAILED " + requestId);
+        }
+    }
+    
+    /**
+     * Handle reject friend request
+     */
+    private void handleRejectFriend(String requestId, String username) {
+        boolean success = server.getFriendshipService().rejectFriendRequest(requestId, username);
+        if (success) {
+            sendMessage("FRIEND_REJECTED " + requestId);
+            System.out.println("Friend request rejected: " + requestId);
+        } else {
+            sendMessage("FRIEND_REJECT_FAILED " + requestId);
+        }
+    }
+    
+    /**
+     * Handle get friends list
+     */
+    private void handleGetFriends(String username) {
+        java.util.Set<String> friends = server.getFriendshipService().getFriends(username);
+        StringBuilder response = new StringBuilder("FRIENDS_LIST " + username);
+        for (String friend : friends) {
+            response.append(" ").append(friend);
+        }
+        sendMessage(response.toString());
+    }
+    
+    /**
+     * Handle get pending friend requests
+     */
+    private void handleGetPendingRequests(String username) {
+        java.util.List<com.reseau.common.FriendRequest> requests = 
+            server.getFriendshipService().getPendingRequests(username);
+        
+        if (requests.isEmpty()) {
+            sendMessage("PENDING_REQUESTS_NONE");
+        } else {
+            for (com.reseau.common.FriendRequest request : requests) {
+                sendMessage("PENDING_REQUEST " + request.getRequestId() + " " + 
+                           request.getSenderUsername());
+            }
+        }
+    }
+    
+    /**
+     * Handle check friendship status
+     */
+    private void handleCheckFriendship(String user1, String user2) {
+        boolean areFriends = server.getFriendshipService().areFriends(user1, user2);
+        sendMessage("FRIENDSHIP_STATUS " + user1 + " " + user2 + " " + areFriends);
     }
 
     /**

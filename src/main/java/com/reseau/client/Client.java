@@ -300,6 +300,66 @@ public class Client {
             System.out.println("Requesting user list refresh...");
         }
     }
+    
+    /**
+     * Send friend request to another user
+     */
+    public void sendFriendRequest(String targetUsername) {
+        if (connected && writer != null) {
+            writer.println("FRIEND_REQUEST " + username + " " + targetUsername);
+            System.out.println("Sending friend request to: " + targetUsername);
+        }
+    }
+    
+    /**
+     * Accept a friend request
+     */
+    public void acceptFriendRequest(String requestId) {
+        if (connected && writer != null) {
+            writer.println("ACCEPT_FRIEND " + requestId + " " + username);
+            System.out.println("Accepting friend request: " + requestId);
+        }
+    }
+    
+    /**
+     * Reject a friend request
+     */
+    public void rejectFriendRequest(String requestId) {
+        if (connected && writer != null) {
+            writer.println("REJECT_FRIEND " + requestId + " " + username);
+            System.out.println("Rejecting friend request: " + requestId);
+        }
+    }
+    
+    /**
+     * Request list of friends
+     */
+    public void requestFriendsList() {
+        if (connected && writer != null) {
+            writer.println("GET_FRIENDS " + username);
+            System.out.println("Requesting friends list...");
+        }
+    }
+    
+    /**
+     * Request pending friend requests
+     */
+    public void requestPendingRequests() {
+        if (connected && writer != null) {
+            writer.println("GET_PENDING_REQUESTS " + username);
+            System.out.println("Requesting pending friend requests...");
+        }
+    }
+    
+    /**
+     * Check friendship status with another user
+     */
+    public void checkFriendship(String otherUsername) {
+        if (connected && writer != null) {
+            writer.println("CHECK_FRIENDSHIP " + username + " " + otherUsername);
+            System.out.println("Checking friendship with: " + otherUsername);
+        }
+    }
 
     /**
      * Disconnect from server
