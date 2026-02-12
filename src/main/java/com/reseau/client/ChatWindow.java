@@ -192,6 +192,8 @@ public class ChatWindow {
         stage.setTitle("NEXO - " + client.getUsername());
         stage.setMinWidth(800);
         stage.setMinHeight(400);
+        stage.setResizable(true);  // Permet de redimensionner la fenêtre
+        stage.setMaximized(true);  // Fenêtre agrandie par défaut
 
         // Handle window close - properly disconnect and exit
         stage.setOnCloseRequest(e -> {

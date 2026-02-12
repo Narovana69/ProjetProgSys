@@ -1,0 +1,14 @@
+# Fichiers de données
+*.dat
+
+# Fichiers de configuration
+*.properties
+
+# Fichiers spécifiques
+cssduchat.txt
+
+# Documentation Markdown
+*.md
+
+# Dossier de compilation Maven
+target/
