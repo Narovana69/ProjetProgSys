@@ -86,14 +86,15 @@ public class ClientHandler implements Runnable {
             
             System.out.println("DEBUG: ClientHandler - User authenticated: " + username);
             
-            // Register client and start session
+            // Register client in the server map first (so we can receive messages)
             server.registerClient(username, this);
             
+            // Send message history BEFORE broadcasting join so history arrives first
+            sendMessageHistory();
+            
+            // Now register in presence service (this broadcasts USER_LIST + "joined" to all)
             String clientIp = socket.getInetAddress().getHostAddress();
             server.getPresenceService().registerUser(username, "Unknown", clientIp);
-            
-            // Send message history
-            sendMessageHistory();
             
             System.out.println("DEBUG: ClientHandler - " + username + " fully registered, entering message loop");
             
@@ -138,6 +139,9 @@ public class ClientHandler implements Runnable {
         
         System.out.println("DEBUG: ClientHandler - Registering " + username + " in server.clients");
         server.registerClient(username, this);
+        
+        // Send message history BEFORE broadcasting join notification
+        sendMessageHistory();
         
         System.out.println("DEBUG: ClientHandler - Registering " + username + " in presence service");
         String clientIp = socket.getInetAddress().getHostAddress();

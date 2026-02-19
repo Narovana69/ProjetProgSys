@@ -10,8 +10,8 @@ import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.Enumeration;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Client - Network layer for NEXO client
@@ -223,7 +223,6 @@ public class Client {
                 }
             } finally {
                 // Don't call disconnect here to avoid recursion
-                // The disconnect will be handled by the close request
             }
         }, "MessageListener");
         
@@ -302,9 +301,9 @@ public class Client {
     }
 
     /**
-     * Disconnect from server
+     * Disconnect from server - thread-safe
      */
-    public void disconnect() {
+    public synchronized void disconnect() {
         if (!connected && socket == null) {
             return; // Already disconnected
         }
@@ -314,6 +313,7 @@ public class Client {
         // Stop heartbeat thread
         if (heartbeatThread != null && heartbeatThread.isAlive()) {
             heartbeatThread.interrupt();
+            heartbeatThread = null;
         }
         
         // Notify server and close resources
@@ -338,6 +338,10 @@ public class Client {
         try {
             if (socket != null && !socket.isClosed()) socket.close();
         } catch (Exception e) {}
+        
+        reader = null;
+        writer = null;
+        socket = null;
         
         System.out.println("Disconnected");
     }

@@ -49,11 +49,7 @@ public class ChatWindow {
     // Multi-panel view system
     private BorderPane mainContent;
     private VBox chatView;
-    private VBox profileView;
     private String currentView = "chat";
-    private Button chatNavButton;
-    private Button profileNavButton;
-    private Button settingsNavButton;
     
     // Private chat system (Discord-style)
     private String currentPrivateChatUser = null;
@@ -105,80 +101,58 @@ public class ChatWindow {
         this.audioPort = config.getAudioPort();
         setupUI();
         setupMessageListener();
+        loadDmContactsFromHistory();
 
-        // Request initial user list
-        Platform.runLater(() -> {
+        // Request initial user list after a short delay (on a background thread to avoid blocking FX)
+        Thread initThread = new Thread(() -> {
             try {
                 Thread.sleep(500); // Wait for connection to stabilize
-                client.refreshUserList();
+                if (client != null && client.isConnected()) {
+                    client.refreshUserList();
+                }
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                Thread.currentThread().interrupt();
             }
-        });
+        }, "InitUserList");
+        initThread.setDaemon(true);
+        initThread.start();
     }
 
     private void setupUI() {
         BorderPane root = new BorderPane();
-        root.setStyle("-fx-background-color: #f5f7fa;");
+        root.setStyle("-fx-background-color: " + DISCORD_BG_MAIN + ";");
 
-        // Modern top bar with gradient
-        HBox topBar = new HBox(15);
-        topBar.setPadding(new Insets(15, 20, 15, 20));
+        // Discord-style top bar
+        HBox topBar = new HBox(12);
+        topBar.setPadding(new Insets(12, 20, 12, 15));
         topBar.setAlignment(Pos.CENTER_LEFT);
-        topBar.setStyle(
-                "-fx-background-color: linear-gradient(to right, #667eea, #764ba2); " +
-                        "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.15), 5, 0, 0, 2);");
-
+        topBar.setStyle("-fx-background-color: " + DISCORD_BG_NAVBAR + ";");
+        
         Label iconLabel = new Label("💬");
-        iconLabel.setStyle("-fx-font-size: 24px; -fx-text-fill: white;");
+        iconLabel.setStyle("-fx-font-size: 22px;");
 
-        Label titleLabel = new Label("NEXO - " + client.getUsername());
+        Label titleLabel = new Label("NEXO");
         titleLabel.setStyle(
-                "-fx-font-size: 20px; " +
+                "-fx-font-size: 18px; " +
                         "-fx-font-weight: bold; " +
-                        "-fx-text-fill: white;");
-
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
+                        "-fx-text-fill: #ffffff;");
         
-        // Navigation buttons
-        chatNavButton = createNavButton("💬", "Chat", true);
-        chatNavButton.setOnAction(e -> switchView("chat"));
+        Label separator = new Label("|");
+        separator.setStyle("-fx-text-fill: " + DISCORD_TEXT_MUTED + "; -fx-font-size: 16px;");
         
-        profileNavButton = createNavButton("👤", "Profile", false);
-        profileNavButton.setOnAction(e -> switchView("profile"));
-        
-        settingsNavButton = createNavButton("⚙️", "Settings", false);
-        settingsNavButton.setOnAction(e -> switchView("settings"));
-
-        Button videoCallButton = createNavButton("📹", "Video Call", false);
-        videoCallButton.setStyle(
-                "-fx-background-color: rgba(255,255,255,0.25); " +
-                        "-fx-text-fill: white; " +
-                        "-fx-font-size: 13px; " +
-                        "-fx-font-weight: bold; " +
-                        "-fx-background-radius: 15px; " +
-                        "-fx-padding: 8px 20px; " +
-                        "-fx-cursor: hand;");
-        videoCallButton.setOnAction(e -> startVideoCall());
-
         Label usernameLabel = new Label(client.getUsername());
         usernameLabel.setStyle(
-                "-fx-font-size: 13px; " +
+                "-fx-font-size: 14px; " +
                         "-fx-font-weight: 500; " +
-                        "-fx-text-fill: white; " +
-                        "-fx-background-color: rgba(255,255,255,0.2); " +
-                        "-fx-background-radius: 15px; " +
-                        "-fx-padding: 5px 15px;");
+                        "-fx-text-fill: " + DISCORD_TEXT_NORMAL + ";");
 
-        topBar.getChildren().addAll(iconLabel, titleLabel, spacer, chatNavButton, profileNavButton, settingsNavButton, videoCallButton);
+        topBar.getChildren().addAll(iconLabel, titleLabel, separator, usernameLabel);
 
         // Main content area with multi-panel support
         mainContent = new BorderPane();
         
-        // Build different views
+        // Build chat view
         chatView = buildChatView();
-        profileView = buildProfileView();
         
         // Show chat view by default
         mainContent.setCenter(chatView);
@@ -201,25 +175,7 @@ public class ChatWindow {
         });
     }
     
-    /**
-     * Create navigation button with icon and text
-     */
-    private Button createNavButton(String icon, String text, boolean active) {
-        Button button = new Button(icon + " " + text);
-        String activeStyle = "-fx-background-color: rgba(255,255,255,0.3); ";
-        String inactiveStyle = "-fx-background-color: rgba(255,255,255,0.15); ";
-        
-        button.setStyle(
-            (active ? activeStyle : inactiveStyle) +
-            "-fx-text-fill: white; " +
-            "-fx-font-size: 13px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-background-radius: 15px; " +
-            "-fx-padding: 8px 18px; " +
-            "-fx-cursor: hand;");
-        
-        return button;
-    }
+
     
     /**
      * Switch between different views (chat, profile, settings)
@@ -227,21 +183,28 @@ public class ChatWindow {
     private void switchView(String viewName) {
         currentView = viewName;
         
-        // Update navigation button styles
-        updateNavButtonStyles();
-        
         switch (viewName) {
             case "chat":
                 currentPrivateChatUser = null;
                 mainContent.setCenter(chatView);
                 break;
-            case "profile":
-                currentPrivateChatUser = null;
-                mainContent.setCenter(profileView);
-                break;
-            case "settings":
-                currentPrivateChatUser = null;
-                mainContent.setCenter(buildSettingsView());
+            case "dms":
+                requestUserListUpdate();
+                if (!dmContacts.isEmpty()) {
+                    // Ouvrir directement le dernier contact DM
+                    String lastContact = currentPrivateChatUser != null && dmContacts.contains(currentPrivateChatUser)
+                        ? currentPrivateChatUser : dmContacts.get(dmContacts.size() - 1);
+                    currentPrivateChatUser = lastContact;
+                    currentView = "private_chat";
+                    lastPrivateMessageSender = "";
+                    privateMessageCount = 0;
+                    mainContent.setCenter(buildPrivateChatView(lastContact));
+                    Platform.runLater(() -> loadStoredPrivateMessages(lastContact));
+                } else {
+                    // Pas de contacts DM : afficher un placeholder
+                    currentPrivateChatUser = null;
+                    mainContent.setCenter(buildEmptyDmsView());
+                }
                 break;
             case "private_chat":
                 // Private chat view is set separately with openPrivateChat()
@@ -253,8 +216,8 @@ public class ChatWindow {
      * Open a private chat with a specific user (Discord-style embedded view)
      */
     private void openPrivateChat(String username) {
+        // Silently ignore if user somehow tries to chat with themselves
         if (username.equals(client.getUsername())) {
-            showTemporaryMessage("You can't chat with yourself!");
             return;
         }
         
@@ -275,11 +238,47 @@ public class ChatWindow {
         
         // Load stored messages after view is built
         Platform.runLater(() -> loadStoredPrivateMessages(username));
-        
-        // Update nav buttons
-        updateNavButtonStyles();
     }
     
+    /**
+     * Vue vide pour quand il n'y a aucun contact DM.
+     */
+    private HBox buildEmptyDmsView() {
+        HBox container = new HBox();
+        container.setStyle("-fx-background-color: " + DISCORD_BG_MAIN + ";");
+
+        // ========== LEFT NAVBAR ==========
+        VBox navbar = buildDiscordNavbar();
+
+        // ========== MAIN AREA ==========
+        VBox mainArea = new VBox(12);
+        mainArea.setAlignment(Pos.CENTER);
+        mainArea.setStyle("-fx-background-color: " + DISCORD_BG_MAIN + ";");
+        HBox.setHgrow(mainArea, Priority.ALWAYS);
+
+        Label icon = new Label("💬");
+        icon.setStyle("-fx-font-size: 48px;");
+
+        Label title = new Label("Aucune conversation privée");
+        title.setStyle("-fx-font-size: 18px; -fx-font-weight: bold; -fx-text-fill: " + DISCORD_TEXT_NORMAL + ";");
+
+        Label hint = new Label("Retourne au chat général et clique\nsur un utilisateur en ligne pour commencer.");
+        hint.setStyle("-fx-font-size: 14px; -fx-text-fill: " + DISCORD_TEXT_MUTED + "; -fx-text-alignment: center;");
+
+        Button goBackBtn = new Button("🏠  Retour au chat");
+        goBackBtn.setStyle(
+            "-fx-background-color: " + DISCORD_BRAND + "; " +
+            "-fx-text-fill: white; -fx-font-size: 14px; -fx-font-weight: bold; " +
+            "-fx-background-radius: 6; -fx-padding: 10 24; -fx-cursor: hand;"
+        );
+        goBackBtn.setOnAction(e -> switchView("chat"));
+
+        mainArea.getChildren().addAll(icon, title, hint, goBackBtn);
+
+        container.getChildren().addAll(navbar, mainArea);
+        return container;
+    }
+
     /**
      * Build the private chat view (Discord-style with navbar and sidebar)
      */
@@ -303,7 +302,7 @@ public class ChatWindow {
     }
     
     /**
-     * Build Discord-style navbar
+     * Build Discord-style navbar for DM view (same buttons as global navbar)
      */
     private VBox buildDiscordNavbar() {
         VBox navbar = new VBox(8);
@@ -314,11 +313,11 @@ public class ChatWindow {
         navbar.setPadding(new Insets(12, 0, 12, 0));
         navbar.setStyle("-fx-background-color: " + DISCORD_BG_NAVBAR + ";");
         
-        // Home button - returns to global chat
-        Button homeBtn = createDiscordNavButton("🏠", "Home (Global Chat)", false);
+        // Home - global chat
+        Button homeBtn = createDiscordNavButton("🏠", "General Chat", false);
         homeBtn.setOnAction(e -> switchView("chat"));
         
-        // DM indicator (active)
+        // DM indicator (active in this view)
         Button dmBtn = createDiscordNavButton("💬", "Direct Messages", true);
         
         // Separator
@@ -328,14 +327,22 @@ public class ChatWindow {
         separator.setStyle("-fx-background-color: " + DISCORD_BG_HOVER + "; -fx-background-radius: 1;");
         VBox.setMargin(separator, new Insets(4, 0, 4, 0));
         
+        // Video call
+        Button videoBtn = createDiscordNavButton("📹", "Video Call", false);
+        videoBtn.setOnAction(e -> startVideoCall());
+        
         // Spacer
         Region spacer = new Region();
         VBox.setVgrow(spacer, Priority.ALWAYS);
         
+        // Logout
+        Button logoutBtn = createDiscordNavButton("🚪", "Logout", false);
+        logoutBtn.setOnAction(e -> handleLogout());
+        
         // User control panel at bottom
         VBox userPanel = buildUserControlPanel();
         
-        navbar.getChildren().addAll(homeBtn, dmBtn, separator, spacer, userPanel);
+        navbar.getChildren().addAll(homeBtn, dmBtn, separator, videoBtn, spacer, logoutBtn, userPanel);
         
         return navbar;
     }
@@ -344,42 +351,49 @@ public class ChatWindow {
      * Create Discord-style navigation button
      */
     private Button createDiscordNavButton(String icon, String tooltip, boolean active) {
-        Button btn = new Button(icon);
+        Button btn = new Button();
+        Label iconLabel = new Label(icon);
+        iconLabel.setStyle("-fx-font-size: 20px; -fx-text-fill: " + (active ? "white" : DISCORD_TEXT_MUTED) + ";");
+        btn.setGraphic(iconLabel);
+        btn.setContentDisplay(javafx.scene.control.ContentDisplay.GRAPHIC_ONLY);
         btn.setPrefSize(48, 48);
         btn.setMinSize(48, 48);
         btn.setMaxSize(48, 48);
         
-        String bgColor = active ? DISCORD_BRAND : DISCORD_BG_MAIN;
-        String radius = active ? "16" : "24";
+        String bgColor = active ? DISCORD_BRAND : "#36393f";
+        String radius = active ? "14" : "24";
         
         btn.setStyle(
             "-fx-background-color: " + bgColor + "; " +
             "-fx-background-radius: " + radius + "; " +
-            "-fx-font-size: 20px; " +
             "-fx-cursor: hand; " +
-            "-fx-text-fill: white;"
+            "-fx-padding: 0;"
         );
         
         btn.setTooltip(new Tooltip(tooltip));
         
-        // Hover effects
         final String finalBgColor = bgColor;
         final String finalRadius = radius;
-        btn.setOnMouseEntered(e -> btn.setStyle(
-            "-fx-background-color: " + DISCORD_BRAND + "; " +
-            "-fx-background-radius: 16; " +
-            "-fx-font-size: 20px; " +
-            "-fx-cursor: hand; " +
-            "-fx-text-fill: white;"
-        ));
+        final boolean isActive = active;
+        btn.setOnMouseEntered(e -> {
+            btn.setStyle(
+                "-fx-background-color: " + DISCORD_BRAND + "; " +
+                "-fx-background-radius: 14; " +
+                "-fx-cursor: hand; " +
+                "-fx-padding: 0;"
+            );
+            iconLabel.setStyle("-fx-font-size: 20px; -fx-text-fill: white;");
+        });
         
-        btn.setOnMouseExited(e -> btn.setStyle(
-            "-fx-background-color: " + finalBgColor + "; " +
-            "-fx-background-radius: " + finalRadius + "; " +
-            "-fx-font-size: 20px; " +
-            "-fx-cursor: hand; " +
-            "-fx-text-fill: white;"
-        ));
+        btn.setOnMouseExited(e -> {
+            btn.setStyle(
+                "-fx-background-color: " + finalBgColor + "; " +
+                "-fx-background-radius: " + finalRadius + "; " +
+                "-fx-cursor: hand; " +
+                "-fx-padding: 0;"
+            );
+            iconLabel.setStyle("-fx-font-size: 20px; -fx-text-fill: " + (isActive ? "white" : DISCORD_TEXT_MUTED) + ";");
+        });
         
         return btn;
     }
@@ -406,17 +420,7 @@ public class ChatWindow {
         
         avatarStack.getChildren().addAll(avatar, statusDot);
         
-        // Settings icon
-        Button settingsBtn = new Button("⚙️");
-        settingsBtn.setStyle(
-            "-fx-background-color: transparent; " +
-            "-fx-font-size: 16px; " +
-            "-fx-cursor: hand;"
-        );
-        settingsBtn.setTooltip(new Tooltip("Settings"));
-        settingsBtn.setOnAction(e -> switchView("settings"));
-        
-        panel.getChildren().addAll(avatarStack, settingsBtn);
+        panel.getChildren().addAll(avatarStack);
         
         return panel;
     }
@@ -518,7 +522,8 @@ public class ChatWindow {
             "-fx-cursor: hand;"
         );
         
-        // Avatar with status
+        // Avatar with status — vérifier la présence réelle
+        boolean isOnline = userLabels.containsKey(username);
         StackPane avatarStack = new StackPane();
         avatarStack.setMinSize(32, 32);
         avatarStack.setMaxSize(32, 32);
@@ -527,7 +532,8 @@ public class ChatWindow {
         avatar.setStyle("-fx-font-size: 20px;");
         
         Circle statusDot = new Circle(5);
-        statusDot.setStyle("-fx-fill: " + DISCORD_ONLINE + "; -fx-stroke: " + DISCORD_BG_SIDE + "; -fx-stroke-width: 2;");
+        String dotColor = isOnline ? DISCORD_ONLINE : "#747f8d";
+        statusDot.setStyle("-fx-fill: " + dotColor + "; -fx-stroke: " + DISCORD_BG_SIDE + "; -fx-stroke-width: 2;");
         StackPane.setAlignment(statusDot, Pos.BOTTOM_RIGHT);
         
         avatarStack.getChildren().addAll(avatar, statusDot);
@@ -588,7 +594,85 @@ public class ChatWindow {
         
         dmListContainer.getChildren().add(entry);
     }
-    
+
+    /**
+     * Charge les contacts DM depuis l'historique des messages priv\u00e9s.
+     * Appel\u00e9 au d\u00e9marrage pour restaurer les bulles DM m\u00eame apr\u00e8s reconnexion.
+     */
+    private void loadDmContactsFromHistory() {
+        for (String contact : privateMessageHistory.keySet()) {
+            if (!dmContacts.contains(contact)) {
+                dmContacts.add(contact);
+            }
+        }
+    }
+
+    /**
+     * Construit la section "MESSAGES PRIV\u00c9S" dans le sidebar du chat global,
+     * listant tous les contacts DM persistants (m\u00eame hors-ligne).
+     */
+    private VBox buildGlobalSidebarDmSection() {
+        VBox section = new VBox(2);
+        section.setPadding(new Insets(12, 8, 5, 8));
+
+        if (dmContacts.isEmpty()) {
+            return section; // rien \u00e0 afficher
+        }
+
+        Label dmHeader = new Label("MESSAGES PRIV\u00c9S");
+        dmHeader.setStyle(
+            "-fx-font-size: 11px; -fx-font-weight: bold; " +
+            "-fx-text-fill: " + DISCORD_TEXT_MUTED + "; " +
+            "-fx-padding: 0 0 6 6;"
+        );
+        section.getChildren().add(dmHeader);
+
+        for (String contact : dmContacts) {
+            boolean isOnline = userLabels.containsKey(contact);
+            HBox entry = new HBox(10);
+            entry.setPadding(new Insets(6, 8, 6, 8));
+            entry.setAlignment(Pos.CENTER_LEFT);
+            entry.setStyle(
+                "-fx-background-color: transparent; " +
+                "-fx-background-radius: 6; -fx-cursor: hand;"
+            );
+
+            // Avatar
+            StackPane avatarStack = new StackPane();
+            avatarStack.setMinSize(28, 28);
+            avatarStack.setMaxSize(28, 28);
+            Label avatar = new Label(getAvatarEmoji(contact));
+            avatar.setStyle("-fx-font-size: 16px;");
+            Circle statusDot = new Circle(4.5);
+            String dotColor = isOnline ? DISCORD_ONLINE : "#747f8d";
+            statusDot.setStyle("-fx-fill: " + dotColor + "; -fx-stroke: " + DISCORD_BG_SIDE + "; -fx-stroke-width: 2;");
+            StackPane.setAlignment(statusDot, Pos.BOTTOM_RIGHT);
+            avatarStack.getChildren().addAll(avatar, statusDot);
+
+            // Name
+            Label nameLabel = new Label(contact);
+            nameLabel.setStyle(
+                "-fx-font-size: 13px; " +
+                "-fx-text-fill: " + (isOnline ? DISCORD_TEXT_NORMAL : DISCORD_TEXT_MUTED) + ";"
+            );
+
+            entry.getChildren().addAll(avatarStack, nameLabel);
+            entry.setOnMouseClicked(e -> openPrivateChat(contact));
+            entry.setOnMouseEntered(e -> entry.setStyle(
+                "-fx-background-color: " + DISCORD_BG_HOVER + "; " +
+                "-fx-background-radius: 6; -fx-cursor: hand;"
+            ));
+            entry.setOnMouseExited(e -> entry.setStyle(
+                "-fx-background-color: transparent; " +
+                "-fx-background-radius: 6; -fx-cursor: hand;"
+            ));
+
+            section.getChildren().add(entry);
+        }
+
+        return section;
+    }
+
     /**
      * Build the main private chat area
      */
@@ -656,23 +740,31 @@ public class ChatWindow {
             "-fx-text-fill: #ffffff;"
         );
         
-        // Status indicator
+        // Status indicator - check real online status
+        boolean isOnline = userLabels.containsKey(username);
         Circle statusDot = new Circle(4);
-        statusDot.setStyle("-fx-fill: " + DISCORD_ONLINE + ";");
+        statusDot.setStyle("-fx-fill: " + (isOnline ? DISCORD_ONLINE : "#747f8d") + ";");
+        
+        // Store reference to update when user list changes
+        statusDot.setId("privateChatStatusDot_" + username);
         
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
         
         // Action buttons
         Button voiceCallBtn = createPrivateChatHeaderButton("📞", "Start Voice Call");
+        voiceCallBtn.setOnAction(e -> showTemporaryMessage("🎤 Voice calls coming soon!"));
+        
         Button videoCallBtn = createPrivateChatHeaderButton("📹", "Start Video Call");
         videoCallBtn.setOnAction(e -> startVideoCall());
-        Button pinBtn = createPrivateChatHeaderButton("📌", "Pinned Messages");
         
-        // Search input
+        Button pinBtn = createPrivateChatHeaderButton("📌", "Pinned Messages");
+        pinBtn.setOnAction(e -> showTemporaryMessage("📌 No pinned messages yet"));
+        
+        // Search input with functionality
         TextField searchInput = new TextField();
-        searchInput.setPromptText("Search");
-        searchInput.setPrefWidth(150);
+        searchInput.setPromptText("Search messages...");
+        searchInput.setPrefWidth(180);
         searchInput.setStyle(
             "-fx-background-color: " + DISCORD_BG_SIDE + "; " +
             "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
@@ -683,6 +775,15 @@ public class ChatWindow {
             "-fx-padding: 4 8;"
         );
         
+        // Search functionality
+        final String chatPartner = username;
+        searchInput.setOnAction(e -> {
+            String searchTerm = searchInput.getText().trim().toLowerCase();
+            if (!searchTerm.isEmpty()) {
+                searchPrivateMessages(chatPartner, searchTerm);
+            }
+        });
+        
         header.getChildren().addAll(
             atSymbol, usernameLabel, statusDot,
             spacer,
@@ -690,6 +791,30 @@ public class ChatWindow {
         );
         
         return header;
+    }
+    
+    /**
+     * Search through private messages
+     */
+    private void searchPrivateMessages(String username, String searchTerm) {
+        List<PrivateMessageData> history = privateMessageHistory.get(username);
+        if (history == null || history.isEmpty()) {
+            showTemporaryMessage("🔍 No messages to search");
+            return;
+        }
+        
+        int found = 0;
+        for (PrivateMessageData msg : history) {
+            if (msg.text.toLowerCase().contains(searchTerm)) {
+                found++;
+            }
+        }
+        
+        if (found > 0) {
+            showTemporaryMessage("🔍 Found " + found + " message(s) containing \"" + searchTerm + "\"");
+        } else {
+            showTemporaryMessage("🔍 No messages found containing \"" + searchTerm + "\"");
+        }
     }
     
     /**
@@ -762,7 +887,11 @@ public class ChatWindow {
             "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
             "-fx-prompt-text-fill: " + DISCORD_TEXT_MUTED + "; " +
             "-fx-border-width: 0; " +
-            "-fx-font-size: 14px;"
+            "-fx-border-color: transparent; " +
+            "-fx-focus-color: transparent; " +
+            "-fx-faint-focus-color: transparent; " +
+            "-fx-font-size: 14px; " +
+            "-fx-padding: 4 0 4 0;"
         );
         HBox.setHgrow(privateMessageInput, Priority.ALWAYS);
         
@@ -848,8 +977,8 @@ public class ChatWindow {
             // Store in history
             storePrivateMessage(currentPrivateChatUser, client.getUsername(), message, timestamp, true);
             
-            // Display own message
-            addPrivateChatMessage(client.getUsername(), message, true);
+            // Display own message with timestamp
+            addPrivateChatMessage(client.getUsername(), message, timestamp, true);
             
             privateMessageInput.clear();
         }
@@ -881,14 +1010,24 @@ public class ChatWindow {
      * Add chat message to private chat
      */
     private void addPrivateChatMessage(String sender, String text, boolean isOwnMessage) {
+        addPrivateChatMessage(sender, text, null, isOwnMessage);
+    }
+    
+    /**
+     * Add chat message to private chat with timestamp
+     */
+    private void addPrivateChatMessage(String sender, String text, String storedTimestamp, boolean isOwnMessage) {
         Platform.runLater(() -> {
             boolean shouldGroup = sender.equals(lastPrivateMessageSender);
             lastPrivateMessageSender = sender;
             
+            String timestamp = storedTimestamp != null ? storedTimestamp : 
+                java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+            
             if (shouldGroup) {
-                addGroupedPrivateMessage(text);
+                addGroupedPrivateMessage(text, timestamp);
             } else {
-                addNewPrivateMessageBlock(sender, text, isOwnMessage);
+                addNewPrivateMessageBlock(sender, text, timestamp, isOwnMessage);
             }
             
             privateMessageCount++;
@@ -897,27 +1036,29 @@ public class ChatWindow {
     }
     
     /**
-     * Add new message block with avatar
+     * Add new message block with avatar (.message-container.starting)
      */
-    private void addNewPrivateMessageBlock(String sender, String text, boolean isOwnMessage) {
-        HBox messageBlock = new HBox(16);
-        messageBlock.setPadding(new Insets(4, 48, 4, 0));
-        messageBlock.setStyle("-fx-background-radius: 4;");
+    private void addNewPrivateMessageBlock(String sender, String text, String timestamp, boolean isOwnMessage) {
+        // .message-container.starting { margin-top: 16px; }
+        HBox messageBlock = new HBox(16); // margin-right: 16px (avatar)
+        messageBlock.setPadding(new Insets(2, 16, 2, 16)); // padding: 2px 16px
+        messageBlock.setStyle("-fx-background-color: transparent;");
+        VBox.setMargin(messageBlock, new Insets(16, 0, 0, 0)); // margin-top: 16px
         
         // Hover effect
         messageBlock.setOnMouseEntered(e -> messageBlock.setStyle(
-            "-fx-background-color: " + DISCORD_BG_HOVER + "; -fx-background-radius: 4;"
+            "-fx-background-color: " + DISCORD_BG_HOVER + ";"
         ));
         messageBlock.setOnMouseExited(e -> messageBlock.setStyle(
-            "-fx-background-color: transparent; -fx-background-radius: 4;"
+            "-fx-background-color: transparent;"
         ));
         
-        // Avatar
+        // Avatar: 40x40, border-radius: 50%
         Label avatar = new Label(getAvatarEmoji(sender));
         avatar.setMinSize(40, 40);
         avatar.setMaxSize(40, 40);
         avatar.setStyle(
-            "-fx-font-size: 24px; " +
+            "-fx-font-size: 20px; " +
             "-fx-background-color: " + DISCORD_BG_SIDE + "; " +
             "-fx-background-radius: 20; " +
             "-fx-alignment: center;"
@@ -925,38 +1066,34 @@ public class ChatWindow {
         avatar.setAlignment(Pos.CENTER);
         
         // Content wrapper
-        VBox contentWrapper = new VBox(4);
+        VBox contentWrapper = new VBox(0);
         HBox.setHgrow(contentWrapper, Priority.ALWAYS);
         
-        // Header
+        // Header: username + timestamp
         HBox msgHeader = new HBox(8);
         msgHeader.setAlignment(Pos.CENTER_LEFT);
         
         Label usernameLabel = new Label(isOwnMessage ? "You" : sender);
         usernameLabel.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-font-weight: bold; " +
+            "-fx-font-weight: 600; " + // font-weight: 600
             "-fx-text-fill: " + (isOwnMessage ? "#ffffff" : getRandomUserColor(sender)) + ";"
         );
         
-        String timestamp = java.time.LocalTime.now().format(
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm")
-        );
         Label timestampLabel = new Label("Today at " + timestamp);
         timestampLabel.setStyle(
-            "-fx-font-size: 11px; " +
+            "-fx-font-size: 12px; " + // 0.75rem
             "-fx-text-fill: " + DISCORD_TEXT_MUTED + ";"
         );
         
         msgHeader.getChildren().addAll(usernameLabel, timestampLabel);
         
-        // Message body
+        // Message body: line-height: 1.375rem
         Label messageBody = new Label(text);
         messageBody.setWrapText(true);
         messageBody.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
-            "-fx-line-spacing: 2;"
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + ";"
         );
         
         contentWrapper.getChildren().addAll(msgHeader, messageBody);
@@ -966,41 +1103,46 @@ public class ChatWindow {
     }
     
     /**
-     * Add grouped message (same sender)
+     * Add grouped message (.message-container.grouped)
      */
-    private void addGroupedPrivateMessage(String text) {
-        HBox messageBlock = new HBox(16);
-        messageBlock.setPadding(new Insets(0, 48, 0, 0));
+    private void addGroupedPrivateMessage(String text, String timestamp) {
+        // .message-container.grouped .content-wrapper { margin-left: 56px; }
+        HBox messageBlock = new HBox(0);
+        messageBlock.setPadding(new Insets(2, 16, 2, 16)); // padding: 2px 16px
+        messageBlock.setStyle("-fx-background-color: transparent;");
         
-        String timestamp = java.time.LocalTime.now().format(
-            java.time.format.DateTimeFormatter.ofPattern("HH:mm")
-        );
+        // Spacer pour aligner avec le contenu (56px = 40px avatar + 16px gap)
+        StackPane spacer = new StackPane();
+        spacer.setMinWidth(56);
+        spacer.setMaxWidth(56);
         
+        // Timestamp visible on hover (position: absolute; left: -50px)
         Label timestampHover = new Label(timestamp);
-        timestampHover.setMinWidth(40);
-        timestampHover.setMaxWidth(40);
+        timestampHover.setMinWidth(50);
+        timestampHover.setAlignment(Pos.CENTER_RIGHT);
         timestampHover.setVisible(false);
         timestampHover.setStyle(
-            "-fx-font-size: 10px; " +
+            "-fx-font-size: 11px; " + // 0.7rem
             "-fx-text-fill: " + DISCORD_TEXT_MUTED + "; " +
-            "-fx-alignment: center-right; " +
-            "-fx-padding: 0 5 0 0;"
+            "-fx-padding: 0 6 0 0;"
         );
-        timestampHover.setAlignment(Pos.CENTER_RIGHT);
+        spacer.getChildren().add(timestampHover);
+        StackPane.setAlignment(timestampHover, Pos.CENTER_RIGHT);
         
+        // Message body
         Label messageBody = new Label(text);
         messageBody.setWrapText(true);
         messageBody.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
-            "-fx-line-spacing: 2;"
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + ";"
         );
         HBox.setHgrow(messageBody, Priority.ALWAYS);
         
-        messageBlock.getChildren().addAll(timestampHover, messageBody);
+        messageBlock.getChildren().addAll(spacer, messageBody);
         
+        // Hover: show timestamp
         messageBlock.setOnMouseEntered(e -> {
-            messageBlock.setStyle("-fx-background-color: " + DISCORD_BG_HOVER + "; -fx-background-radius: 4;");
+            messageBlock.setStyle("-fx-background-color: " + DISCORD_BG_HOVER + ";");
             timestampHover.setVisible(true);
         });
         messageBlock.setOnMouseExited(e -> {
@@ -1008,13 +1150,7 @@ public class ChatWindow {
             timestampHover.setVisible(false);
         });
         
-        HBox wrapper = new HBox();
-        Region spacer = new Region();
-        spacer.setMinWidth(56);
-        wrapper.getChildren().addAll(spacer, messageBlock);
-        HBox.setHgrow(messageBlock, Priority.ALWAYS);
-        
-        privateMessagesContainer.getChildren().add(wrapper);
+        privateMessagesContainer.getChildren().add(messageBlock);
     }
     
     /**
@@ -1050,25 +1186,7 @@ public class ChatWindow {
         return colors[index];
     }
     
-    /**
-     * Update navigation button active states
-     */
-    private void updateNavButtonStyles() {
-        chatNavButton.setStyle(createNavButtonStyle(currentView.equals("chat")));
-        profileNavButton.setStyle(createNavButtonStyle(currentView.equals("profile")));
-        settingsNavButton.setStyle(createNavButtonStyle(currentView.equals("settings")));
-    }
-    
-    private String createNavButtonStyle(boolean active) {
-        String bgColor = active ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.15)";
-        return "-fx-background-color: " + bgColor + "; " +
-               "-fx-text-fill: white; " +
-               "-fx-font-size: 13px; " +
-               "-fx-font-weight: bold; " +
-               "-fx-background-radius: 15px; " +
-               "-fx-padding: 8px 18px; " +
-               "-fx-cursor: hand;";
-    }
+
     
     /**
      * Build the chat view (main messaging interface) - Discord style
@@ -1110,12 +1228,11 @@ public class ChatWindow {
         
         // Home button (active - global chat)
         Button homeBtn = createDiscordNavButton("🏠", "General Chat", true);
+        homeBtn.setOnAction(e -> switchView("chat"));
         
-        // Friends/DM button
-        Button friendsBtn = createDiscordNavButton("👥", "Friends & DMs", false);
-        friendsBtn.setOnAction(e -> {
-            // Could show DM list or stay in chat
-        });
+        // DMs button - ouvre la vue messages privés persistants
+        Button dmsBtn = createDiscordNavButton("💬", "Messages Privés", false);
+        dmsBtn.setOnAction(e -> switchView("dms"));
         
         // Separator
         Region separator = new Region();
@@ -1132,10 +1249,14 @@ public class ChatWindow {
         Region spacer = new Region();
         VBox.setVgrow(spacer, Priority.ALWAYS);
         
+        // Logout button
+        Button logoutBtn = createDiscordNavButton("🚪", "Logout", false);
+        logoutBtn.setOnAction(e -> handleLogout());
+        
         // User control panel at bottom
         VBox userPanel = buildUserControlPanel();
         
-        navbar.getChildren().addAll(homeBtn, friendsBtn, separator, videoBtn, spacer, userPanel);
+        navbar.getChildren().addAll(homeBtn, dmsBtn, separator, videoBtn, spacer, logoutBtn, userPanel);
         
         return navbar;
     }
@@ -1184,7 +1305,7 @@ public class ChatWindow {
         usersHeader.setPadding(new Insets(15, 10, 5, 15));
         usersHeader.setAlignment(Pos.CENTER_LEFT);
         
-        Label usersTitle = new Label("ONLINE USERS");
+        Label usersTitle = new Label("ONLINE — " + (userLabels.isEmpty() ? "0" : userLabels.size()));
         usersTitle.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + DISCORD_TEXT_MUTED + ";");
         
         Region spacer = new Region();
@@ -1201,7 +1322,13 @@ public class ChatWindow {
         userListContainer = new VBox(2);
         userListContainer.setPadding(new Insets(5, 8, 5, 8));
         
-        ScrollPane userScroll = new ScrollPane(userListContainer);
+        // ---- DM Contacts section (persistent) ----
+        VBox dmSection = buildGlobalSidebarDmSection();
+        
+        VBox scrollContent = new VBox();
+        scrollContent.getChildren().addAll(userListContainer, dmSection);
+        
+        ScrollPane userScroll = new ScrollPane(scrollContent);
         userScroll.setFitToWidth(true);
         userScroll.setStyle(
             "-fx-background: " + DISCORD_BG_SIDE + "; " +
@@ -1343,7 +1470,11 @@ public class ChatWindow {
             "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
             "-fx-prompt-text-fill: " + DISCORD_TEXT_MUTED + "; " +
             "-fx-border-width: 0; " +
-            "-fx-font-size: 14px;"
+            "-fx-border-color: transparent; " +
+            "-fx-focus-color: transparent; " +
+            "-fx-faint-focus-color: transparent; " +
+            "-fx-font-size: 14px; " +
+            "-fx-padding: 4 0 4 0;"
         );
         HBox.setHgrow(messageInput, Priority.ALWAYS);
         
@@ -1433,26 +1564,29 @@ public class ChatWindow {
     }
     
     /**
-     * Add new message block with avatar
+     * Add new message block with avatar (.message-container.starting)
      */
     private void addNewGlobalMessageBlock(String sender, String text) {
-        HBox messageBlock = new HBox(16);
-        messageBlock.setPadding(new Insets(4, 48, 4, 0));
-        messageBlock.setStyle("-fx-background-radius: 4;");
+        // .message-container.starting { margin-top: 16px; }
+        HBox messageBlock = new HBox(16); // margin-right: 16px (avatar)
+        messageBlock.setPadding(new Insets(2, 16, 2, 16)); // padding: 2px 16px
+        messageBlock.setStyle("-fx-background-color: transparent;");
+        VBox.setMargin(messageBlock, new Insets(16, 0, 0, 0)); // margin-top: 16px
         
+        // Hover effect
         messageBlock.setOnMouseEntered(e -> messageBlock.setStyle(
-            "-fx-background-color: " + DISCORD_BG_HOVER + "; -fx-background-radius: 4;"
+            "-fx-background-color: " + DISCORD_BG_HOVER + ";"
         ));
         messageBlock.setOnMouseExited(e -> messageBlock.setStyle(
-            "-fx-background-color: transparent; -fx-background-radius: 4;"
+            "-fx-background-color: transparent;"
         ));
         
-        // Avatar
+        // Avatar: 40x40, border-radius: 50%
         Label avatar = new Label(getAvatarEmoji(sender));
         avatar.setMinSize(40, 40);
         avatar.setMaxSize(40, 40);
         avatar.setStyle(
-            "-fx-font-size: 24px; " +
+            "-fx-font-size: 20px; " +
             "-fx-background-color: " + DISCORD_BG_SIDE + "; " +
             "-fx-background-radius: 20; " +
             "-fx-alignment: center;"
@@ -1460,10 +1594,10 @@ public class ChatWindow {
         avatar.setAlignment(Pos.CENTER);
         
         // Content wrapper
-        VBox contentWrapper = new VBox(4);
+        VBox contentWrapper = new VBox(0);
         HBox.setHgrow(contentWrapper, Priority.ALWAYS);
         
-        // Header
+        // Header: username + timestamp
         HBox msgHeader = new HBox(8);
         msgHeader.setAlignment(Pos.CENTER_LEFT);
         
@@ -1471,7 +1605,7 @@ public class ChatWindow {
         Label usernameLabel = new Label(sender);
         usernameLabel.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-font-weight: bold; " +
+            "-fx-font-weight: 600; " + // font-weight: 600
             "-fx-text-fill: " + (isOwnMessage ? "#ffffff" : getRandomUserColor(sender)) + ";"
         );
         
@@ -1479,7 +1613,10 @@ public class ChatWindow {
             java.time.format.DateTimeFormatter.ofPattern("HH:mm")
         );
         Label timestampLabel = new Label("Today at " + timestamp);
-        timestampLabel.setStyle("-fx-font-size: 11px; -fx-text-fill: " + DISCORD_TEXT_MUTED + ";");
+        timestampLabel.setStyle(
+            "-fx-font-size: 12px; " + // 0.75rem
+            "-fx-text-fill: " + DISCORD_TEXT_MUTED + ";"
+        );
         
         msgHeader.getChildren().addAll(usernameLabel, timestampLabel);
         
@@ -1488,8 +1625,7 @@ public class ChatWindow {
         messageBody.setWrapText(true);
         messageBody.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
-            "-fx-line-spacing: 2;"
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + ";"
         );
         
         contentWrapper.getChildren().addAll(msgHeader, messageBody);
@@ -1499,41 +1635,50 @@ public class ChatWindow {
     }
     
     /**
-     * Add grouped message (same sender)
+     * Add grouped message (.message-container.grouped)
      */
     private void addGroupedGlobalMessage(String text) {
-        HBox messageBlock = new HBox(16);
-        messageBlock.setPadding(new Insets(0, 48, 0, 0));
+        // .message-container.grouped .content-wrapper { margin-left: 56px; }
+        HBox messageBlock = new HBox(0);
+        messageBlock.setPadding(new Insets(2, 16, 2, 16)); // padding: 2px 16px
+        messageBlock.setStyle("-fx-background-color: transparent;");
+        
+        // Spacer pour aligner avec le contenu (56px = 40px avatar + 16px gap)
+        StackPane spacer = new StackPane();
+        spacer.setMinWidth(56);
+        spacer.setMaxWidth(56);
         
         String timestamp = java.time.LocalTime.now().format(
             java.time.format.DateTimeFormatter.ofPattern("HH:mm")
         );
         
+        // Timestamp visible on hover
         Label timestampHover = new Label(timestamp);
-        timestampHover.setMinWidth(40);
-        timestampHover.setMaxWidth(40);
+        timestampHover.setMinWidth(50);
+        timestampHover.setAlignment(Pos.CENTER_RIGHT);
         timestampHover.setVisible(false);
         timestampHover.setStyle(
-            "-fx-font-size: 10px; " +
+            "-fx-font-size: 11px; " +
             "-fx-text-fill: " + DISCORD_TEXT_MUTED + "; " +
-            "-fx-alignment: center-right; " +
-            "-fx-padding: 0 5 0 0;"
+            "-fx-padding: 0 6 0 0;"
         );
-        timestampHover.setAlignment(Pos.CENTER_RIGHT);
+        spacer.getChildren().add(timestampHover);
+        StackPane.setAlignment(timestampHover, Pos.CENTER_RIGHT);
         
+        // Message body
         Label messageBody = new Label(text);
         messageBody.setWrapText(true);
         messageBody.setStyle(
             "-fx-font-size: 14px; " +
-            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
-            "-fx-line-spacing: 2;"
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + ";"
         );
         HBox.setHgrow(messageBody, Priority.ALWAYS);
         
-        messageBlock.getChildren().addAll(timestampHover, messageBody);
+        messageBlock.getChildren().addAll(spacer, messageBody);
         
+        // Hover: show timestamp
         messageBlock.setOnMouseEntered(e -> {
-            messageBlock.setStyle("-fx-background-color: " + DISCORD_BG_HOVER + "; -fx-background-radius: 4;");
+            messageBlock.setStyle("-fx-background-color: " + DISCORD_BG_HOVER + ";");
             timestampHover.setVisible(true);
         });
         messageBlock.setOnMouseExited(e -> {
@@ -1541,13 +1686,7 @@ public class ChatWindow {
             timestampHover.setVisible(false);
         });
         
-        HBox wrapper = new HBox();
-        Region spacer = new Region();
-        spacer.setMinWidth(56);
-        wrapper.getChildren().addAll(spacer, messageBlock);
-        HBox.setHgrow(messageBlock, Priority.ALWAYS);
-        
-        globalMessagesContainer.getChildren().add(wrapper);
+        globalMessagesContainer.getChildren().add(messageBlock);
     }
     
     /**
@@ -1632,9 +1771,10 @@ public class ChatWindow {
                         dmContacts.add(otherUser);
                     }
                     
-                    // If private chat with this user is open, display it
+                    // If private chat with this user is open, display it with timestamp
                     if (currentPrivateChatUser != null && currentPrivateChatUser.equals(otherUser)) {
-                        Platform.runLater(() -> addPrivateChatMessage(sender, text, false));
+                        final String ts = timestamp;
+                        Platform.runLater(() -> addPrivateChatMessage(sender, text, ts, false));
                     } else {
                         // Show notification for new private message
                         Platform.runLater(() -> showTemporaryMessage("🔔 New message from " + sender));
@@ -1673,6 +1813,23 @@ public class ChatWindow {
     }
     
     /**
+     * Convert an epoch millis timestamp string to "HH:mm" format.
+     * Falls back to the raw value if it can't be parsed.
+     */
+    private String formatEpochTimestamp(String raw) {
+        try {
+            long epoch = Long.parseLong(raw);
+            return java.time.Instant.ofEpochMilli(epoch)
+                .atZone(java.time.ZoneId.systemDefault())
+                .toLocalTime()
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+        } catch (NumberFormatException e) {
+            // Already formatted (e.g. "14:30"), return as-is
+            return raw;
+        }
+    }
+    
+    /**
      * Store a private message in history
      */
     private void storePrivateMessage(String otherUser, String sender, String text, String timestamp, boolean isOwnMessage) {
@@ -1684,6 +1841,11 @@ public class ChatWindow {
         if (history.size() > MAX_MESSAGES) {
             history.remove(0);
         }
+        
+        // Persist contact in dmContacts so it survives reconnection
+        if (!dmContacts.contains(otherUser)) {
+            dmContacts.add(otherUser);
+        }
     }
     
     /**
@@ -1693,7 +1855,7 @@ public class ChatWindow {
         List<PrivateMessageData> history = privateMessageHistory.get(username);
         if (history != null && !history.isEmpty()) {
             for (PrivateMessageData msg : history) {
-                addPrivateChatMessage(msg.sender, msg.text, msg.isOwnMessage);
+                addPrivateChatMessage(msg.sender, msg.text, msg.timestamp, msg.isOwnMessage);
             }
         }
     }
@@ -1716,6 +1878,14 @@ public class ChatWindow {
                         UserInfo userInfo = UserInfo.fromString(part);
                         if (userInfo != null) {
                             Label userLabel = createUserLabel(userInfo);
+                            // Si c'est soi-même, ajouter "(Moi)" et ne pas ouvrir de private chat
+                            if (userInfo.getUsername().equals(client.getUsername())) {
+                                userLabel.setOnMouseClicked(null);
+                                VBox userBox = (VBox) userLabel.getGraphic();
+                                HBox mainLine = (HBox) userBox.getChildren().get(0);
+                                Label nameLbl = (Label) mainLine.getChildren().get(1);
+                                nameLbl.setText(nameLbl.getText() + " (Moi)");
+                            }
                             newUserLabels.put(userInfo.getUsername(), userLabel);
                             System.out.println("DEBUG: Added user: " + userInfo.getUsername());
                         } else {
@@ -1728,12 +1898,35 @@ public class ChatWindow {
                 userLabels.putAll(newUserLabels);
                 userListContainer.getChildren().setAll(newUserLabels.values());
                 
+                // Update private chat header status if open
+                if (currentPrivateChatUser != null) {
+                    updatePrivateChatStatus(currentPrivateChatUser);
+                }
+                
                 System.out.println("DEBUG: User list updated successfully: " + userLabels.size() + " users");
             } catch (Exception e) {
                 System.err.println("Error updating user list: " + e.getMessage());
                 e.printStackTrace();
             }
         });
+    }
+    
+    /**
+     * Update the status dot in private chat header
+     */
+    private void updatePrivateChatStatus(String username) {
+        boolean isOnline = userLabels.containsKey(username);
+        String color = isOnline ? DISCORD_ONLINE : "#747f8d";
+        
+        // Find the status dot in the current view
+        if (mainContent.getCenter() != null) {
+            mainContent.getCenter().lookupAll(".circle").forEach(node -> {
+                if (node instanceof Circle && node.getId() != null && 
+                    node.getId().equals("privateChatStatusDot_" + username)) {
+                    ((Circle) node).setStyle("-fx-fill: " + color + ";");
+                }
+            });
+        }
     }
 
     /**
@@ -1896,205 +2089,69 @@ public class ChatWindow {
             showTemporaryMessage("❌ Erreur: " + e.getMessage());
         }
     }
+
     
     /**
-     * Build the profile view panel
+     * Handle logout - return to login window
+     * Disconnects on a daemon thread to avoid blocking the FX thread,
+     * then switches back to the login window on the FX thread.
      */
-    private VBox buildProfileView() {
-        VBox profileContainer = new VBox(20);
-        profileContainer.setPadding(new Insets(40));
-        profileContainer.setAlignment(Pos.TOP_CENTER);
-        profileContainer.setStyle("-fx-background-color: white;");
+    private void handleLogout() {
+        // Disable UI immediately to prevent double-clicks
+        if (messageInput != null) messageInput.setDisable(true);
+        if (sendButton != null) sendButton.setDisable(true);
         
-        // Profile header
-        Label profileIcon = new Label("👤");
-        profileIcon.setStyle("-fx-font-size: 80px;");
-        
-        Label usernameLabel = new Label(client.getUsername());
-        usernameLabel.setStyle(
-            "-fx-font-size: 28px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-text-fill: #2c3e50;");
-        
-        // Get user account info
-        VBox infoBox = new VBox(15);
-        infoBox.setPadding(new Insets(30));
-        infoBox.setMaxWidth(500);
-        infoBox.setStyle(
-            "-fx-background-color: #f8f9fa; " +
-            "-fx-background-radius: 15px; " +
-            "-fx-border-color: #e0e5ec; " +
-            "-fx-border-radius: 15px; " +
-            "-fx-border-width: 2px;");
-        
-        infoBox.getChildren().addAll(
-            createInfoRow("🆔 Username", client.getUsername()),
-            createInfoRow("🌐 Server", "Connected"),
-            createInfoRow("📊 Status", "Online"),
-            createInfoRow("💬 Messages", String.valueOf(messageCount)),
-            createInfoRow("👥 Online Users", String.valueOf(userLabels.size()))
-        );
-        
-        // Action buttons
-        HBox actionButtons = new HBox(15);
-        actionButtons.setAlignment(Pos.CENTER);
-        
-        Button editProfileBtn = new Button("✏️ Edit Profile");
-        editProfileBtn.setStyle(
-            "-fx-background-color: #667eea; " +
-            "-fx-text-fill: white; " +
-            "-fx-font-size: 14px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-background-radius: 20px; " +
-            "-fx-padding: 10px 25px; " +
-            "-fx-cursor: hand;");
-        editProfileBtn.setOnAction(e -> {
-            // TODO: Implement profile editing
-            showTemporaryMessage("Profile editing coming soon!");
-        });
-        
-        Button logoutBtn = new Button("🚪 Logout");
-        logoutBtn.setStyle(
-            "-fx-background-color: #e74c3c; " +
-            "-fx-text-fill: white; " +
-            "-fx-font-size: 14px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-background-radius: 20px; " +
-            "-fx-padding: 10px 25px; " +
-            "-fx-cursor: hand;");
-        logoutBtn.setOnAction(e -> shutdown());
-        
-        actionButtons.getChildren().addAll(editProfileBtn, logoutBtn);
-        
-        profileContainer.getChildren().addAll(
-            profileIcon,
-            usernameLabel,
-            infoBox,
-            actionButtons
-        );
-        
-        return profileContainer;
+        Thread logoutThread = new Thread(() -> {
+            try {
+                System.out.println("Logging out...");
+                
+                // Close video call if open
+                if (videoCallWindow != null) {
+                    try {
+                        videoCallWindow.disconnect();
+                    } catch (Exception e) {
+                        System.err.println("Error closing video call: " + e.getMessage());
+                    }
+                    videoCallWindow = null;
+                }
+                
+                // Disconnect client (sends DISCONNECT, closes streams)
+                if (client != null && client.isConnected()) {
+                    client.disconnect();
+                }
+                
+            } catch (Exception ex) {
+                System.err.println("Error during logout: " + ex.getMessage());
+            } finally {
+                // Always return to login window, even if disconnect failed
+                Platform.runLater(() -> {
+                    AuthLoginWindow loginWindow = new AuthLoginWindow(stage);
+                    loginWindow.show();
+                });
+            }
+        }, "LogoutThread");
+        logoutThread.setDaemon(true);
+        logoutThread.start();
     }
     
     /**
-     * Build the settings view panel
-     */
-    private VBox buildSettingsView() {
-        VBox settingsContainer = new VBox(20);
-        settingsContainer.setPadding(new Insets(40));
-        settingsContainer.setAlignment(Pos.TOP_CENTER);
-        settingsContainer.setStyle("-fx-background-color: white;");
-        
-        Label settingsIcon = new Label("⚙️");
-        settingsIcon.setStyle("-fx-font-size: 60px;");
-        
-        Label titleLabel = new Label("Settings");
-        titleLabel.setStyle(
-            "-fx-font-size: 28px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-text-fill: #2c3e50;");
-        
-        VBox settingsBox = new VBox(15);
-        settingsBox.setPadding(new Insets(30));
-        settingsBox.setMaxWidth(600);
-        settingsBox.setStyle(
-            "-fx-background-color: #f8f9fa; " +
-            "-fx-background-radius: 15px; " +
-            "-fx-border-color: #e0e5ec; " +
-            "-fx-border-radius: 15px; " +
-            "-fx-border-width: 2px;");
-        
-        settingsBox.getChildren().addAll(
-            createSettingRow("🔔 Notifications", "Enabled"),
-            createSettingRow("🎨 Theme", "Purple Gradient"),
-            createSettingRow("📹 Video Quality", "High (720p)"),
-            createSettingRow("🎤 Audio Quality", "High"),
-            createSettingRow("💾 Message History", "Enabled (100 msgs)"),
-            createSettingRow("🔒 RAID-1 Storage", "Active")
-        );
-        
-        Label infoLabel = new Label("Settings customization coming in future updates");
-        infoLabel.setStyle(
-            "-fx-font-size: 12px; " +
-            "-fx-text-fill: #7f8c8d; " +
-            "-fx-font-style: italic;");
-        
-        settingsContainer.getChildren().addAll(
-            settingsIcon,
-            titleLabel,
-            settingsBox,
-            infoLabel
-        );
-        
-        return settingsContainer;
-    }
-    
-    /**
-     * Create an info row for profile view
-     */
-    private HBox createInfoRow(String label, String value) {
-        HBox row = new HBox(10);
-        row.setAlignment(Pos.CENTER_LEFT);
-        
-        Label labelText = new Label(label);
-        labelText.setStyle(
-            "-fx-font-size: 14px; " +
-            "-fx-font-weight: bold; " +
-            "-fx-text-fill: #667eea; " +
-            "-fx-min-width: 150px;");
-        
-        Label valueText = new Label(value);
-        valueText.setStyle(
-            "-fx-font-size: 14px; " +
-            "-fx-text-fill: #2c3e50;");
-        
-        row.getChildren().addAll(labelText, valueText);
-        return row;
-    }
-    
-    /**
-     * Create a settings row
-     */
-    private HBox createSettingRow(String label, String value) {
-        HBox row = new HBox(15);
-        row.setAlignment(Pos.CENTER_LEFT);
-        row.setPadding(new Insets(5));
-        
-        Label labelText = new Label(label);
-        labelText.setStyle(
-            "-fx-font-size: 14px; " +
-            "-fx-font-weight: 500; " +
-            "-fx-text-fill: #2c3e50; " +
-            "-fx-min-width: 200px;");
-        
-        Region spacer = new Region();
-        HBox.setHgrow(spacer, Priority.ALWAYS);
-        
-        Label valueText = new Label(value);
-        valueText.setStyle(
-            "-fx-font-size: 14px; " +
-            "-fx-text-fill: #667eea; " +
-            "-fx-font-weight: bold;");
-        
-        row.getChildren().addAll(labelText, spacer, valueText);
-        return row;
-    }
-    
-    /**
-     * Show temporary message (replaces dialog)
+     * Show temporary message (Discord-style toast notification)
      */
     private void showTemporaryMessage(String message) {
         Label tempLabel = new Label(message);
         tempLabel.setStyle(
-            "-fx-background-color: #667eea; " +
-            "-fx-text-fill: white; " +
-            "-fx-padding: 15px 25px; " +
-            "-fx-background-radius: 10px; " +
-            "-fx-font-size: 14px;");
+            "-fx-background-color: " + DISCORD_BG_SIDE + "; " +
+            "-fx-text-fill: " + DISCORD_TEXT_NORMAL + "; " +
+            "-fx-padding: 15 25; " +
+            "-fx-background-radius: 8; " +
+            "-fx-font-size: 14px; " +
+            "-fx-border-color: " + DISCORD_BRAND + "; " +
+            "-fx-border-width: 0 0 0 3; " +
+            "-fx-border-radius: 8;");
         
         VBox overlay = new VBox(tempLabel);
         overlay.setAlignment(Pos.CENTER);
-        overlay.setStyle("-fx-background-color: rgba(0, 0, 0, 0.3);");
+        overlay.setStyle("-fx-background-color: rgba(0, 0, 0, 0.5);");
         
         BorderPane root = (BorderPane) stage.getScene().getRoot();
         root.setCenter(overlay);
@@ -2110,7 +2167,7 @@ public class ChatWindow {
     }
 
     private void shutdown() {
-        new Thread(() -> {
+        Thread shutdownThread = new Thread(() -> {
             try {
                 System.out.println("Shutting down chat window...");
                 
@@ -2121,9 +2178,10 @@ public class ChatWindow {
                     } catch (Exception e) {
                         System.err.println("Error closing video call: " + e.getMessage());
                     }
+                    videoCallWindow = null;
                 }
                 
-                // Disconnect client
+                // Disconnect client (sends DISCONNECT to server, closes streams)
                 if (client != null && client.isConnected()) {
                     client.disconnect();
                 }
@@ -2144,7 +2202,9 @@ public class ChatWindow {
                 System.err.println("Error during shutdown: " + ex.getMessage());
                 System.exit(1);
             }
-        }, "ShutdownThread").start();
+        }, "ShutdownThread");
+        shutdownThread.setDaemon(true);
+        shutdownThread.start();
     }
     
     /**
@@ -2156,9 +2216,20 @@ public class ChatWindow {
         if (parts.length >= 5) {
             try {
                 String sender = parts[2];
+                String recipient = parts[3];
                 String text = parts[4];
                 
-                // Add Discord-style message for history
+                // Only show public (broadcast) messages in global chat history
+                if (!recipient.equals("all")) {
+                    // Private message from history - store it silently
+                    String otherUser = sender.equals(client.getUsername()) ? recipient : sender;
+                    boolean isOwn = sender.equals(client.getUsername());
+                    String timestamp = formatEpochTimestamp(parts[1]);
+                    storePrivateMessage(otherUser, sender, text, timestamp, isOwn);
+                    return;
+                }
+                
+                // Add Discord-style message for global chat history
                 Platform.runLater(() -> addGlobalChatMessage(sender, text));
                 messageCount++;
                 
