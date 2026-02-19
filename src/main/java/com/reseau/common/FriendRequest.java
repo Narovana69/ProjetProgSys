@@ -3,9 +3,7 @@ package com.reseau.common;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 
-/**
- * FriendRequest - Represents a friend request between two users
- */
+
 public class FriendRequest implements Serializable {
     private static final long serialVersionUID = 1L;
     
@@ -17,10 +15,10 @@ public class FriendRequest implements Serializable {
     private LocalDateTime respondedAt;
     
     public enum FriendRequestStatus {
-        PENDING,    // En attente
-        ACCEPTED,   // Acceptée
-        REJECTED,   // Refusée
-        CANCELLED   // Annulée par l'envoyeur
+        PENDING,    
+        ACCEPTED,   
+        REJECTED,  
+        CANCELLED   
     }
     
     public FriendRequest(String senderUsername, String receiverUsername) {
@@ -50,7 +48,7 @@ public class FriendRequest implements Serializable {
         this.respondedAt = LocalDateTime.now();
     }
     
-    // Getters
+
     public String getRequestId() { return requestId; }
     public String getSenderUsername() { return senderUsername; }
     public String getReceiverUsername() { return receiverUsername; }

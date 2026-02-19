@@ -6,9 +6,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-/**
- * FriendshipService - Manages friend requests and friendships
- */
+
 public class FriendshipService {
     private static final String FRIENDS_DB_FILE = ".nexo_friends.dat";
     private static final String REQUESTS_DB_FILE = ".nexo_friend_requests.dat";
@@ -33,11 +31,9 @@ public class FriendshipService {
         loadData();
     }
     
-    /**
-     * Send a friend request
-     */
+    
     public synchronized FriendRequest sendFriendRequest(String senderUsername, String receiverUsername) {
-        // ✅ Prevent self-friending
+
         if (senderUsername.equals(receiverUsername)) {
             System.out.println("Blocked self-friend request: " + senderUsername);
             return null; // Cannot add yourself

@@ -1,8 +1,5 @@
 package com.reseau.client;
 
-/**
- * CallState - Enum representing the state of a video call
- */
 public enum CallState {
     IDLE("Idle"),
     RINGING("Ringing"),
